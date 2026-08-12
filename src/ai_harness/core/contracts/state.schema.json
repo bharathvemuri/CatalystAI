@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://anthropic.invalid/ai-harness/contracts/state.schema.json",
+  "title": "Derived harness state",
+  "description": "The rendered view of the event log (.harness/state.json). READ-ONLY: edits are overwritten on the next render. Enum values here are the locked-down version of spec section 2's proposal.",
+  "type": "object",
+  "required": ["harness_version", "phase", "spec", "tasks", "human_approvals_pending"],
+  "properties": {
+    "_generated": {
+      "type": "string",
+      "description": "Warning banner; present in the rendered file, not part of the logical state."
+    },
+    "harness_version": { "type": "string" },
+    "phase": {
+      "type": "string",
+      "enum": ["spec_review", "chunking", "setup", "execution", "documentation", "production"]
+    },
+    "spec": {
+      "type": "object",
+      "required": ["status", "open_questions", "revision"],
+      "additionalProperties": false,
+      "properties": {
+        "status": { "type": "string", "enum": ["draft", "in_review", "approved"] },
+        "open_questions": { "type": "integer", "minimum": 0 },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of answer rounds recorded against revised-spec.md."
+        }
+      }
+    },
+    "tasks": {
+      "type": "object",
+      "propertyNames": { "pattern": "^T-[0-9]{3,}$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["status", "depends_on"],
+        "additionalProperties": false,
+        "properties": {
+          "dir": { "type": ["string", "null"] },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "in_progress", "blocked", "review_approved", "human_approved", "done"]
+          },
+          "depends_on": { "type": "array", "items": { "type": "string" } },
+          "issue_ref": { "type": ["string", "null"] },
+          "current_agent": { "type": ["string", "null"] },
+          "assigned_models": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["agent", "result", "ts"],
+              "properties": {
+                "agent": { "type": ["string", "null"] },
+                "result": { "type": ["string", "null"] },
+                "ts": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "human_approvals_pending": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Tickets whose Reviewer decision was APPROVE and which are halted awaiting an explicit human approval (spec section 5.4)."
+    }
+  }
+}

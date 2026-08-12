@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://anthropic.invalid/ai-harness/contracts/task.schema.json",
+  "title": "Chunked task frontmatter",
+  "description": "The YAML frontmatter of .harness/tasks/<dir>/T-XXX.md (spec section 3).",
+  "type": "object",
+  "required": [
+    "id", "title", "phase", "dir", "depends_on", "inputs",
+    "start_condition", "done_condition", "acceptance_criteria", "status"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^T-[0-9]{3,}$" },
+    "title": { "type": "string", "minLength": 1 },
+    "phase": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Milestone grouping. Becomes the GitHub milestone in phase 2."
+    },
+    "dir": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "Working directory for the task. Becomes the GitHub label in phase 2. The directory itself is not created until the Developer agent first implements in it (open question #9)."
+    },
+    "depends_on": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^T-[0-9]{3,}$" },
+      "description": "Task ids that must be `done` before this one is eligible. This is what makes cross-ticket parallelism safe."
+    },
+    "inputs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Source references, e.g. 'revised-spec.md#section-3.2'."
+    },
+    "start_condition": { "type": "string", "minLength": 1 },
+    "done_condition": { "type": "string", "minLength": 1 },
+    "acceptance_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Each must be independently checkable. Embedded as a checklist in the GitHub issue body."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "in_progress", "blocked", "review_approved", "human_approved", "done"]
+    }
+  }
+}

@@ -1,0 +1,54 @@
+# Model registry — the closed set the Architect may choose from (spec section 5.1,
+# open question #2 resolved: static registry for v1).
+#
+# An ungoverned free-text model choice is itself non-deterministic and cannot be
+# gated or budgeted, so selection is constrained to these ids. Adding a model is
+# a deliberate edit here (or an override in .harness/overrides/model-registry.yaml),
+# never a runtime decision.
+
+version: "0.1"
+
+providers:
+  anthropic:
+    models:
+      - id: claude-opus-5
+        tier: high-capability
+        cost: high
+        notes: >-
+          Current flagship. Thinking is on by default; disabling it is only legal
+          at effort "high" or below.
+      - id: claude-opus-4-8
+        tier: high-capability
+        cost: high
+        notes: Previous-generation Opus. Kept as a fallback target.
+      - id: claude-sonnet-5
+        tier: balanced
+        cost: medium
+        notes: Near-Opus quality on coding and agentic work at Sonnet cost.
+      - id: claude-haiku-4-5
+        tier: fast
+        cost: low
+        notes: Simple, latency-sensitive, non-intelligence-sensitive work only.
+
+# Per-agent defaults. The Architect may override per ticket, but only with an id
+# that appears above.
+defaults:
+  architect: claude-opus-5
+  security: claude-opus-5      # security is never cost-optimised down
+  reviewer: claude-opus-5
+  developer: claude-sonnet-5
+  qa: claude-sonnet-5
+  performance: claude-sonnet-5
+  documentation: claude-sonnet-5
+  devops: claude-sonnet-5
+
+# Effort applies to every agent invocation unless a ticket overrides it.
+effort:
+  architect: high
+  security: high
+  reviewer: high
+  developer: high
+  qa: medium
+  performance: medium
+  documentation: medium
+  devops: medium

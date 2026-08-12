@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://anthropic.invalid/ai-harness/contracts/event.schema.json",
+  "title": "Harness event",
+  "description": "One line of an append-only event-log segment (.harness/events/<stream>.jsonl). The log is the source of truth; state.json is derived from it.",
+  "type": "object",
+  "required": ["v", "id", "ts", "stream", "type", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "v": {
+      "type": "string",
+      "description": "Log format version."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^ev_[0-9a-f]{16}$"
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC, microsecond precision, Z-suffixed. Used for cross-stream ordering."
+    },
+    "stream": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "Segment owner: 'main' for the orchestrator, or a task id for a ticket's own worktree. Exactly one process writes each stream."
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "harness.initialized",
+        "phase.changed",
+        "spec.docs_loaded",
+        "spec.round_opened",
+        "spec.answers_recorded",
+        "spec.review_clean",
+        "spec.finalized",
+        "tasks.generated",
+        "task.status_changed",
+        "task.models_assigned",
+        "task.agent_completed",
+        "task.issue_linked",
+        "task.human_approval_requested",
+        "task.human_approved"
+      ]
+    },
+    "payload": {
+      "type": "object"
+    }
+  }
+}
