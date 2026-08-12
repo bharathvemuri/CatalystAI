@@ -47,6 +47,11 @@ def run_status(args: argparse.Namespace) -> int:
     info(f"spec      {spec['status']}  "
          f"(revision {spec['revision']}, {spec['open_questions']} open question(s))")
 
+    repo = state.get("repo")
+    if repo:
+        info(f"repo      {repo['provider']}:{repo['full']}"
+             + ("  (created by the harness)" if repo.get("created") else ""))
+
     tasks = state["tasks"]
     if not tasks:
         info("tasks     none yet")
@@ -56,6 +61,10 @@ def run_status(args: argparse.Namespace) -> int:
             counts[task["status"]] = counts.get(task["status"], 0) + 1
         summary = ", ".join(f"{n} {s}" for s, n in sorted(counts.items()))
         info(f"tasks     {len(tasks)} total — {summary}")
+
+        linked = sum(1 for t in tasks.values() if t.get("issue_ref"))
+        if linked:
+            info(f"issues    {linked} of {len(tasks)} task(s) linked to a tracker issue")
 
         ready = [tid for tid, t in tasks.items()
                  if t["status"] == "pending"
@@ -107,4 +116,13 @@ def _summarize(event) -> str:
         return f"{len(p.get('tasks', []))} task(s)"
     if event.type == "task.status_changed":
         return f"{p.get('task_id')} → {p.get('status')}"
+    if event.type == "tracker.repo_linked":
+        return f"{p.get('provider')}:{p.get('repo')}" + (" (created)" if p.get("created") else "")
+    if event.type == "tracker.metadata_synced":
+        return (f"{len(p.get('labels_created', []))} label(s), "
+                f"{len(p.get('milestones_created', []))} milestone(s) created")
+    if event.type == "task.issue_linked":
+        return f"{p.get('task_id')} → {p.get('issue_ref')}"
+    if event.type == "task.issue_reconciled":
+        return f"{p.get('task_id')} {p.get('issue_ref')}: {', '.join(p.get('changes', []))}"
     return ""

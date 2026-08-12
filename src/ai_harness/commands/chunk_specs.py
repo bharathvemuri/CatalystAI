@@ -13,7 +13,7 @@ from typing import Any
 
 import yaml
 
-from .. import contracts, loaders
+from .. import contracts, loaders, taskfile
 from ..contracts import ContractViolation
 from ..llm import NO_CREDENTIALS, LLM, LLMError, credentials_available
 from ..paths import Project
@@ -54,8 +54,10 @@ CHUNK_SCHEMA = {
     "additionalProperties": False,
 }
 
-FRONTMATTER_KEYS = ["id", "title", "phase", "dir", "depends_on", "inputs",
-                    "start_condition", "done_condition", "acceptance_criteria", "status"]
+# Shared with taskfile so a file this command writes and a later phase rewrites
+# keep the same key order — otherwise recording an issue reference reorders the
+# whole block and the diff hides the one line that actually changed.
+FRONTMATTER_KEYS = taskfile.FRONTMATTER_KEYS
 
 
 def add_parser(subparsers) -> None:
@@ -238,5 +240,5 @@ def run(args: argparse.Namespace) -> int:
     info(f"Wrote {len(written)} task file(s) under {rel(project.tasks, project.root)}")
     info(f"phase: {state['phase']}")
     info("")
-    info("Next: harness status   (phase 2 setup is not implemented yet)")
+    info("Next: harness setup-project existing --dry-run   (see the plan before anything is created)")
     return 0

@@ -43,6 +43,11 @@
     "status": {
       "type": "string",
       "enum": ["pending", "in_progress", "blocked", "review_approved", "human_approved", "done"]
+    },
+    "issue_ref": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*:[^#\\s]+#[0-9]+$",
+      "description": "Provider-qualified tracker issue, e.g. 'github:org/repo#42'. Written by phase 2 once the issue exists; absent until then. The event log remains the source of truth — this copy exists so a task file read on its own still names its ticket."
     }
   }
 }

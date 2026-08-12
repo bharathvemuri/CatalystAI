@@ -6,7 +6,7 @@ import argparse
 import sys
 
 from . import HARNESS_VERSION
-from .commands import chunk_specs, init, review_specs, status
+from .commands import chunk_specs, init, review_specs, setup_project, status
 from .commands._common import CommandError
 
 EPILOG = """\
@@ -14,9 +14,14 @@ phase 1 (implemented):
   init            attach the harness to a target repository
   review-specs    find every gap and ask about it; never assumes
   chunk-specs     split the approved spec into dependency-ordered tasks
+
+phase 2 (implemented):
+  setup-project   create tracker issues, labels and milestones from the tasks
+
+any time:
   status / log    read-only views over the event log
 
-phases 2-5 (setup, execution, documentation, production) are not built yet.
+phases 3-5 (execution, documentation, production) are not built yet.
 """
 
 
@@ -34,6 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_parser(subparsers)
     review_specs.add_parser(subparsers)
     chunk_specs.add_parser(subparsers)
+    setup_project.add_parser(subparsers)
     status.add_parser(subparsers)
     return parser
 

@@ -19,7 +19,7 @@ Deviations from it: [`SPEC-AMENDMENTS.md`](SPEC-AMENDMENTS.md).
 |---|---|---|
 | 1 — spec review | `review-specs` | **built** |
 | 1 — chunking | `chunk-specs` | **built** |
-| 2 — setup | `setup-project` | not started |
+| 2 — setup | `setup-project` | **built** (GitHub) |
 | 3 — execution | `run-architect`, `run-agent` | not started |
 | 4 — documentation | `write-documentation` | not started |
 | 5 — production | TBD | not scoped |
@@ -94,6 +94,71 @@ harness log        # the append-only event log
 - `--model <id>` — override the registry default for one run. Only ids in the
   registry are accepted; a free-text model name is refused.
 
+## Phase 2 walkthrough
+
+`setup-project` projects the task graph onto an issue tracker: one issue per
+task file, the task's `dir` as the label, its `phase` as the milestone.
+
+### Credentials
+
+A token is read from the first of these that has one — the process environment,
+`<target-repo>/.env`, then `~/.ai-harness/.env`:
+
+```
+GITHUB_TOKEN=ghp_...
+```
+
+Both `.env` locations are gitignored (see `.env.example`). If none carries a
+token and the GitHub CLI is logged in, `gh auth token` is used as a fallback, so
+a machine that already ran `gh auth login` needs no `.env` at all. The token
+needs the `repo` scope.
+
+### Running it
+
+```bash
+harness setup-project existing --dry-run
+```
+
+`existing` targets the repository this checkout already points at, read from
+`git remote origin`; `--repo owner/name` overrides it. The command prints a
+complete plan — account, repository, labels and milestones to create, and every
+issue it would open — and `--dry-run` stops there.
+
+```bash
+harness setup-project existing
+```
+
+Without `--dry-run` the same plan is printed and then you are asked to confirm.
+Nothing reaches the tracker before you answer. `--yes` skips the prompt for
+non-interactive runs.
+
+To create the repository as well:
+
+```bash
+harness setup-project new --repo my-service --private
+```
+
+Both `--repo` and a visibility flag are required — nothing is inferred from the
+directory name. `--owner <org>` creates under an organisation instead of your
+own account. **`new` creates no folders in the target project**: the repository
+starts empty, and target directories appear in phase 3 when the Developer agent
+first implements in one (spec open question #9).
+
+### Re-running
+
+`setup-project` is meant to be re-run. A task already linked to an issue is
+never re-created; its issue is compared against the current task file and
+updated only where the two disagree. Labels someone added by hand are kept — the
+harness adds, it does not prune. Each issue is recorded as a `task.issue_linked`
+event *and* as `issue_ref` in the task's frontmatter, so a task file read on its
+own still names its ticket.
+
+Failure is partial by design: a rejected credential or an exhausted rate limit
+would fail identically for every remaining task, so the run aborts on it; one
+rejected issue does not stop the other thirty-nine. Either way, everything
+already created is in the event log, so the next run resumes instead of
+duplicating.
+
 ## Layout
 
 ```
@@ -107,6 +172,9 @@ src/ai_harness/
 ├── qa_round.py       the open-questions file format
 ├── registry.py       the closed set of models an agent may use
 ├── paths.py          three-tier content resolution
+├── env.py            layered credential lookup for the tracker adapters
+├── taskfile.py       reading task files back, re-validated on load
+├── trackers/         issue-tracker adapters (base.py + github.py)
 ├── commands/         one module per CLI command
 └── core/             shipped defaults (contracts, prompts, model registry)
 ```
@@ -145,5 +213,6 @@ python -m pytest tests -q
 ```
 
 The suite covers the deterministic layer only — event log, state fold, Q&A
-round-trip, dependency-graph validation, contracts, and registry enforcement. It
-makes no API calls.
+round-trip, dependency-graph validation, contracts, registry enforcement, and
+the whole of phase 2 against a mocked tracker. It makes no API calls and no
+network calls of any kind.

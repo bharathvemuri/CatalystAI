@@ -29,6 +29,21 @@
         }
       }
     },
+    "repo": {
+      "type": ["object", "null"],
+      "required": ["provider", "full"],
+      "additionalProperties": false,
+      "description": "Tracker repository phase 2 attached this project to. Null until `harness setup-project` has run.",
+      "properties": {
+        "provider": { "type": "string" },
+        "full": { "type": "string", "description": "owner/name" },
+        "url": { "type": ["string", "null"] },
+        "created": {
+          "type": "boolean",
+          "description": "True when the harness created the repository itself (`setup-project new`)."
+        }
+      }
+    },
     "tasks": {
       "type": "object",
       "propertyNames": { "pattern": "^T-[0-9]{3,}$" },

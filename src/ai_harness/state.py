@@ -25,6 +25,7 @@ def empty_state() -> dict[str, Any]:
         "harness_version": HARNESS_VERSION,
         "phase": "spec_review",
         "spec": {"status": "draft", "open_questions": 0, "revision": 0},
+        "repo": None,
         "tasks": {},
         "human_approvals_pending": [],
     }
@@ -81,6 +82,17 @@ def apply(state: dict[str, Any], event: Event) -> dict[str, Any]:
             entry["depends_on"] = task.get("depends_on", [])
             entry["status"] = "pending"
         state["phase"] = "setup"
+
+    elif t == "tracker.repo_linked":
+        state["repo"] = {
+            "provider": p.get("provider"),
+            "full": p.get("repo"),
+            "url": p.get("url"),
+            "created": bool(p.get("created")),
+        }
+
+    elif t == "task.issue_reconciled":
+        _task(state, p["task_id"])["issue_ref"] = p.get("issue_ref")
 
     elif t == "task.status_changed":
         entry = _task(state, p["task_id"])
