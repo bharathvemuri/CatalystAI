@@ -120,3 +120,12 @@ class Tracker(ABC):
     @abstractmethod
     def update_issue(self, repo: RepoRef, number: int, spec: IssueSpec) -> Issue:
         ...
+
+    @abstractmethod
+    def open_pull_request(self, repo: RepoRef, *, head: str, base: str, title: str,
+                          body: str, draft: bool = True) -> tuple[int, str]:
+        """Open a change proposal. Returns ``(number, url)``.
+
+        Draft by default: phase 3 ends at a human's judgement, and a
+        ready-for-review PR asserts more than an approved ticket has earned.
+        """

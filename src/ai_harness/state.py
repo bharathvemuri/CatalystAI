@@ -102,10 +102,20 @@ def apply(state: dict[str, Any], event: Event) -> dict[str, Any]:
     elif t == "task.models_assigned":
         _task(state, p["task_id"])["assigned_models"] = p.get("assigned_models", {})
 
+    elif t == "task.agent_started":
+        _task(state, p["task_id"])["current_agent"] = p.get("agent")
+
     elif t == "task.agent_completed":
         entry = _task(state, p["task_id"])
         entry["history"].append({"agent": p.get("agent"), "result": p.get("result"), "ts": event.ts})
         entry["current_agent"] = None
+
+    elif t == "task.review_decided":
+        entry = _task(state, p["task_id"])
+        entry["history"].append({"agent": "reviewer", "result": p.get("decision"),
+                                 "ts": event.ts})
+        if p.get("decision") == "APPROVE":
+            entry["status"] = "review_approved"
 
     elif t == "task.issue_linked":
         _task(state, p["task_id"])["issue_ref"] = p.get("issue_ref")

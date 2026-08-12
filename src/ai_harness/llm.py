@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from typing import Any, Callable
 
 import anthropic
 
@@ -129,3 +129,100 @@ class LLM:
             return json.loads(text)
         except json.JSONDecodeError as exc:  # pragma: no cover - schema makes this near-impossible
             raise LLMError(f"model returned unparseable JSON: {exc}") from exc
+
+    def agentic(
+        self,
+        *,
+        system: str,
+        user: str,
+        tools: list[dict[str, Any]],
+        dispatch: Callable[[str, dict[str, Any]], tuple[str, bool]],
+        schema: dict[str, Any],
+        max_turns: int = 60,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        on_tool: Callable[[str, dict[str, Any], bool], None] | None = None,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Run a tool-use loop, ending in one schema-validated result.
+
+        A hand-written loop rather than the SDK's tool runner: every tool call
+        here crosses a boundary the harness has to police — an agent contract
+        says which paths that agent may write, and commands run inside the
+        ticket's container rather than on the host. Those checks live in
+        ``dispatch``, and the loop exists to give them somewhere to stand.
+
+        Returns the parsed final result and the transcript of tool calls, which
+        is the evidence the Reviewer later reads.
+        """
+        messages: list[dict[str, Any]] = [{"role": "user", "content": user}]
+        transcript: list[dict[str, Any]] = []
+
+        for turn in range(max_turns):
+            message = self._call(system=system, messages=messages, tools=tools,
+                                 schema=schema, max_tokens=max_tokens)
+
+            if message.stop_reason == "refusal":
+                details = getattr(message, "stop_details", None)
+                raise Refused(getattr(details, "category", None),
+                              getattr(details, "explanation", None))
+            if message.stop_reason == "max_tokens":
+                raise LLMError(f"response hit max_tokens ({max_tokens}) on turn {turn + 1}")
+
+            messages.append({"role": "assistant", "content": message.content})
+
+            calls = [b for b in message.content if b.type == "tool_use"]
+            if not calls:
+                text = next((b.text for b in message.content if b.type == "text"), None)
+                if not text:
+                    raise LLMError(
+                        f"agent stopped without a result (stop_reason={message.stop_reason})")
+                try:
+                    return json.loads(text), transcript
+                except json.JSONDecodeError as exc:
+                    raise LLMError(f"agent returned unparseable JSON: {exc}") from exc
+
+            # Every result goes back in one user message: splitting them teaches
+            # the model to stop making parallel calls.
+            results = []
+            for call in calls:
+                output, is_error = dispatch(call.name, dict(call.input))
+                transcript.append({"tool": call.name, "input": dict(call.input),
+                                   "ok": not is_error, "output": output[:4000]})
+                if on_tool is not None:
+                    on_tool(call.name, dict(call.input), is_error)
+                results.append({"type": "tool_result", "tool_use_id": call.id,
+                                "content": output or "(no output)", "is_error": is_error})
+            messages.append({"role": "user", "content": results})
+
+        raise LLMError(
+            f"agent did not finish within {max_turns} turns; the ticket is probably "
+            "too large to implement as one unit")
+
+    def _call(self, *, system: str, messages: list[dict[str, Any]],
+              tools: list[dict[str, Any]], schema: dict[str, Any], max_tokens: int):
+        try:
+            with self.client.messages.stream(
+                model=self.model,
+                max_tokens=max_tokens,
+                system=[{"type": "text", "text": system,
+                         "cache_control": {"type": "ephemeral"}}],
+                thinking={"type": "adaptive"},
+                output_config={
+                    "effort": self.effort,
+                    "format": {"type": "json_schema", "schema": schema},
+                },
+                tools=tools,
+                messages=messages,
+            ) as stream:
+                return stream.get_final_message()
+        except anthropic.AuthenticationError as exc:
+            raise LLMError(
+                "authentication failed. Set ANTHROPIC_API_KEY, or run `ant auth login`."
+            ) from exc
+        except TypeError as exc:
+            if "authentication method" in str(exc):
+                raise LLMError(NO_CREDENTIALS) from exc
+            raise
+        except anthropic.APIStatusError as exc:
+            raise LLMError(f"API error {exc.status_code}: {exc.message}") from exc
+        except anthropic.APIConnectionError as exc:
+            raise LLMError(f"could not reach the API: {exc}") from exc

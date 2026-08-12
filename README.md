@@ -20,7 +20,7 @@ Deviations from it: [`SPEC-AMENDMENTS.md`](SPEC-AMENDMENTS.md).
 | 1 — spec review | `review-specs` | **built** |
 | 1 — chunking | `chunk-specs` | **built** |
 | 2 — setup | `setup-project` | **built** (GitHub) |
-| 3 — execution | `run-architect`, `run-agent` | not started |
+| 3 — execution | `run`, `run-ticket`, `approve` | **built** |
 | 4 — documentation | `write-documentation` | not started |
 | 5 — production | TBD | not scoped |
 
@@ -159,6 +159,80 @@ rejected issue does not stop the other thirty-nine. Either way, everything
 already created is in the event log, so the next run resumes instead of
 duplicating.
 
+## Phase 3 walkthrough
+
+Each ticket runs in its own git worktree and its own container, through a fixed
+pipeline: **Architect → Developer → gates → {Security, QA, Performance} →
+Reviewer → human approval gate**.
+
+### What it needs
+
+```bash
+pip install -e ".[context]"     # adds tree-sitter for the context index
+```
+
+Docker must be installed: spec §10 requires project-level work — installs,
+builds, tests, agent shell commands — to happen inside a container rather than
+on your machine. `--no-container` waives that and writes an
+`ticket.isolation_waived` event, so the audit trail says which kind of run
+produced the evidence.
+
+### Running
+
+```bash
+harness run --dry-run
+```
+
+Prints the plan: which tickets are dependency-ready, where their worktrees go,
+and the pipeline they will follow. Then:
+
+```bash
+harness run-ticket T-001      # one ticket
+harness run                   # every dependency-ready ticket
+```
+
+Both ask before starting. The pipeline stops at the human gate — nothing merges,
+closes an issue, or opens a PR on its own.
+
+### Gates are scripts, not opinions
+
+`core/gates/{build,test,lint,security-scan}.sh` run real commands and emit a
+JSON result validated against `gate-result.schema.json`. Evidence lands in
+`.harness/reports/<id>/evidence/`. A gate that *skipped* is not a gate that
+passed — whether a skip is tolerated is set in `core/gates/thresholds.yaml`,
+alongside the coverage and performance regression limits and the
+Developer→Reviewer retry cap.
+
+The Reviewer reads those results rather than re-deriving them, and its verdict
+is checked against them: an `APPROVE` issued while the build is failing or a
+HIGH security finding is open is downgraded to `BLOCK` and recorded as
+overridden.
+
+### Approving
+
+```bash
+harness approve T-001
+```
+
+Assembles `.harness/reports/T-001/approval.md` from the real Security, QA and
+Reviewer reports plus the gate results, prints it, and asks. It refuses — with
+no override flag — if a report is missing, a gate failed, or the Reviewer did
+not approve. On approval it offers to push the ticket branch and open a **draft**
+pull request that closes the linked issue and embeds the evidence.
+
+### Agent contracts
+
+The eight contracts live in `core/agents/` as portable markdown, each following
+the Standard Agent Contract (Mission / Inputs / Responsibilities /
+Non-Responsibilities / Required Tools / Required Output / Blocking Conditions /
+Success / Failure). Override any of them per project in
+`.harness/overrides/agents/`.
+
+Write boundaries are enforced, not requested: the Architect, Security and
+Reviewer agents are never handed write tools, QA may write only tests,
+Documentation only docs, and a write outside an agent's scope is rejected and
+recorded as a contract violation.
+
 ## Layout
 
 ```
@@ -175,8 +249,17 @@ src/ai_harness/
 ├── env.py            layered credential lookup for the tracker adapters
 ├── taskfile.py       reading task files back, re-validated on load
 ├── trackers/         issue-tracker adapters (base.py + github.py)
+├── agents.py         agent contracts, their tools, and boundary enforcement
+├── pipeline.py       the per-ticket state machine
+├── gates.py          deterministic gates + verdict
+├── thresholds.py     gate limits, resolved through the three tiers
+├── worktrees.py      one isolated git worktree per ticket
+├── containers.py     one devcontainer per worktree
+├── execution.py      Executor seam: container vs host
+├── context_index.py  tree-sitter symbol/dependency index
 ├── commands/         one module per CLI command
-└── core/             shipped defaults (contracts, prompts, model registry)
+└── core/             shipped defaults: contracts, prompts, model registry,
+                      agent contracts, gate scripts, Dockerfile
 ```
 
 In a target repository:
@@ -187,10 +270,12 @@ In a target repository:
 ├── state.json        DERIVED — regenerated, do not edit
 ├── revised-spec.md   append-only Q&A audit trail
 ├── open-questions.md the current round, awaiting your answers
-├── overrides/        per-project prompt/contract/registry overrides
+├── overrides/        per-project prompt/contract/registry/agent overrides
 ├── tasks/<dir>/      T-XXX.md
-├── architecture/
-└── reports/
+├── worktrees/<id>/   one isolated checkout per active ticket
+├── index/            DERIVED — the context index cache
+├── architecture/     ADR-NNN.md (numbers allocated, never self-assigned)
+└── reports/<id>/     agent reports, gate-results.json, evidence/, approval.md
 ```
 
 Cross-project state (institutional-memory lessons) lives in `~/.ai-harness/`.
@@ -204,6 +289,11 @@ same relative path in `.harness/overrides/` (per project) or `~/.ai-harness/`
 - `prompts/review-specs.md` — how strict the reviewer is about what counts as a gap
 - `prompts/chunk-specs.md` — how work is sliced
 - `model-registry.yaml` — which models and effort levels agents may use
+- `agents/<name>.md` — an agent's contract; `agents/_preamble.md` for rules
+  shared by all eight
+- `gates/*.sh` — how build, test, lint and security scanning are actually run
+- `gates/thresholds.yaml` — coverage and performance limits, retry cap, which
+  gates may be skipped
 
 ## Development
 
@@ -213,6 +303,8 @@ python -m pytest tests -q
 ```
 
 The suite covers the deterministic layer only — event log, state fold, Q&A
-round-trip, dependency-graph validation, contracts, registry enforcement, and
-the whole of phase 2 against a mocked tracker. It makes no API calls and no
-network calls of any kind.
+round-trip, dependency-graph validation, contracts, registry enforcement, phase
+2 against a mocked tracker, and phase 3's contracts, write boundaries, gates,
+worktrees, context index and approval gate. It makes no API calls and no network
+calls of any kind; the gate scripts and git worktrees are exercised for real
+against temporary directories.

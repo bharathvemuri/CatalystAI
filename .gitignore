@@ -27,6 +27,7 @@ htmlcov/
 # control; the derived view and generated index do not.
 .harness/state.json
 .harness/index/
+.harness/worktrees/
 .harness/gitignore-suggestions
 
 # Editors / OS

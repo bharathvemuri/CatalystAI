@@ -1,0 +1,49 @@
+# Gate thresholds.
+#
+# The framework document says coverage and performance must not regress "beyond
+# the configured threshold" without saying where that is configured. Here — and
+# resolved through the same three tiers as every other content file, so a
+# project overrides it in .harness/overrides/gates/thresholds.yaml without
+# forking the harness.
+#
+# These are deliberately conservative. A project that wants to be stricter (or,
+# knowingly, looser) says so in its own copy rather than arguing with an agent.
+
+version: "0.1"
+
+coverage:
+  # Percentage points of statement coverage a ticket may lose. 0.0 means a
+  # ticket may not reduce coverage at all.
+  max_statement_regression: 0.0
+  max_branch_regression: 1.0
+  # Applies only when a baseline exists. The first ticket in a repo with no
+  # coverage history is not failed for having nothing to compare against.
+  require_baseline: false
+
+performance:
+  # Percentage slower than baseline before a measured regression blocks.
+  max_regression_percent: 20.0
+  # Absolute floor, so a 20% regression on a 2ms operation is not a blocker.
+  ignore_below_ms: 10.0
+  require_baseline: false
+
+security:
+  # Spec section 5.3 and the Security contract. Not a preference.
+  max_critical: 0
+  max_high: 0
+  # A scanner that could not run fails the gate rather than passing silently.
+  fail_on_missing_scanner: true
+
+review:
+  # Developer -> Reviewer remediation cycles before the ticket is marked blocked
+  # and left for a human. Every cycle is recorded in the event log.
+  max_block_cycles: 3
+
+gates:
+  # A gate that reports "skip" is not a pass. `required` means a skip counts as
+  # a failure; `optional` means a skip is tolerated but a genuine failure still
+  # fails. security-scan is required to match the Security contract's blocking
+  # conditions — a repository with no scanner available should override
+  # security.fail_on_missing_scanner deliberately, not get a silent pass here.
+  required: [build, test, security-scan]
+  optional: [lint]

@@ -96,6 +96,7 @@ class FakeTracker(Tracker):
         self.systemic_errors = set(systemic_errors or ())
         self.created_repos: list[tuple[str, bool]] = []
         self.updated: list[tuple[int, IssueSpec]] = []
+        self.pull_requests: list[dict] = []
 
     def whoami(self) -> str:
         return "tester"
@@ -148,6 +149,16 @@ class FakeTracker(Tracker):
 
     def get_issue(self, repo, number):
         return self.issues.get(number)
+
+    def open_pull_request(self, repo, *, head, base, title, body, draft=True):
+        number = self._next
+        self._next += 1
+        self.pull_requests.append({"repo": repo.full, "head": head, "base": base,
+                                   "title": title, "body": body, "draft": draft})
+        return number, f"https://github.example/{repo.full}/pull/{number}"
+
+    def default_branch(self, repo):
+        return "main"
 
     def update_issue(self, repo, number, spec):
         self._guard(spec)

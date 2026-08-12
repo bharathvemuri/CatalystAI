@@ -15,6 +15,7 @@ GITIGNORE_HINT = """\
 # trail and belong in version control; the derived view and generated index do not.
 .harness/state.json
 .harness/index/
+.harness/worktrees/
 """
 
 

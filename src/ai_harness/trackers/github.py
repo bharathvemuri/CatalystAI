@@ -254,6 +254,18 @@ class GitHubTracker(Tracker):
                                    self._issue_body(repo, spec))
         return _to_issue(updated or {})
 
+    def open_pull_request(self, repo: RepoRef, *, head: str, base: str, title: str,
+                          body: str, draft: bool = True) -> tuple[int, str]:
+        created, _ = self._request("POST", f"/repos/{repo.full}/pulls", {
+            "title": title, "head": head, "base": base, "body": body, "draft": draft,
+        })
+        created = created or {}
+        return created.get("number", 0), created.get("html_url", "")
+
+    def default_branch(self, repo: RepoRef) -> str:
+        found, _ = self._request("GET", f"/repos/{repo.full}", allow_404=True)
+        return (found or {}).get("default_branch", "main")
+
     def _issue_body(self, repo: RepoRef, spec: IssueSpec) -> dict:
         body: dict = {"title": spec.title, "body": spec.body, "labels": list(spec.labels)}
         if spec.milestone:

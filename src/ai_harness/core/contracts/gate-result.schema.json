@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://anthropic.invalid/ai-harness/contracts/gate-result.schema.json",
+  "title": "Gate result",
+  "description": "The single JSON object a gate script prints on stdout (spec section 5.3). Gates are scripts, not prompts: this is a record of a command that actually ran, and the Reviewer agent reads it rather than re-deriving the verdict.",
+  "type": "object",
+  "required": ["gate", "status", "exit_code", "summary"],
+  "additionalProperties": false,
+  "properties": {
+    "gate": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Script name without extension, e.g. 'build', 'security-scan'."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail", "skip"],
+      "description": "'skip' means the gate did not apply here. A skip is never a pass: whether it is tolerated is decided by gates.required in thresholds.yaml."
+    },
+    "command": {
+      "type": "string",
+      "description": "The command actually executed. Empty when the gate skipped before running anything."
+    },
+    "exit_code": { "type": "integer" },
+    "summary": { "type": "string", "minLength": 1 },
+    "evidence_file": {
+      "type": "string",
+      "description": "Full captured output, under .harness/reports/<id>/evidence/."
+    },
+    "evidence_tail": {
+      "type": "string",
+      "description": "Last few KB of the evidence, so a reader has the failure in hand without opening the file."
+    },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "metrics": {
+      "type": "object",
+      "description": "Gate-specific structured numbers: test counts, scanner statuses, coverage.",
+      "additionalProperties": true
+    }
+  }
+}
