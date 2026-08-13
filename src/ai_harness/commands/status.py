@@ -6,7 +6,6 @@ import argparse
 import json
 
 from ..contracts import ContractViolation, validate
-from ..state import fold
 from ._common import info, open_log, require_project, rel, sync_state, warn
 
 
@@ -51,6 +50,15 @@ def run_status(args: argparse.Namespace) -> int:
     if repo:
         info(f"repo      {repo['provider']}:{repo['full']}"
              + ("  (created by the harness)" if repo.get("created") else ""))
+
+    docs = state.get("documentation")
+    if docs:
+        pr = docs.get("pr") or {}
+        suffix = f"  PR #{pr['number']}" if pr.get("number") else ""
+        missing = "" if docs.get("required_present") else "  (a required doc is missing)"
+        info(f"docs      {len(docs.get('files_touched', []))} file(s) from "
+             f"{len(docs.get('tickets_documented', []))} shipped ticket(s)"
+             f"{suffix}{missing}")
 
     tasks = state["tasks"]
     if not tasks:
@@ -123,6 +131,12 @@ def _summarize(event) -> str:
                 f"{len(p.get('milestones_created', []))} milestone(s) created")
     if event.type == "task.issue_linked":
         return f"{p.get('task_id')} → {p.get('issue_ref')}"
+    if event.type == "docs.pass_completed":
+        return (f"{len(p.get('files_touched', []))} file(s), "
+                f"{len(p.get('tickets_documented', []))} ticket(s) documented"
+                + ("  VIOLATIONS" if p.get("violations") else ""))
+    if event.type == "docs.pr_opened":
+        return f"PR #{p.get('number')} {p.get('url')}"
     if event.type == "task.issue_reconciled":
         return f"{p.get('task_id')} {p.get('issue_ref')}: {', '.join(p.get('changes', []))}"
     return ""

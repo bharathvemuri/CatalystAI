@@ -31,6 +31,15 @@ from .registry import Registry
 AGENTS = ("architect", "developer", "security", "qa", "performance",
           "reviewer", "documentation", "devops")
 
+# A *role* is a contract an agent can be run under. Usually one per agent, but
+# the Documentation agent has two missions with the same write scope and the
+# same model: the per-ticket pass, and the phase 4 project pass. Keeping that as
+# a second contract rather than a second agent means the registry, the boundary
+# table and the report filename all stay keyed by the agent they belong to.
+ROLES = AGENTS + ("documentation-project",)
+
+ROLE_AGENT = {"documentation-project": "documentation"}
+
 PREAMBLE = "agents/_preamble.md"
 
 # The boundary table from the framework document, as enforcement rather than
@@ -84,15 +93,15 @@ class AgentResult:
 
 # ------------------------------------------------------------------ contracts
 
-def load_contract(project: Project, agent: str) -> str:
-    """Preamble plus the agent's own contract, as one system prompt."""
-    if agent not in AGENTS:
-        raise AgentError(f"unknown agent {agent!r}; known: {', '.join(AGENTS)}")
+def load_contract(project: Project, role: str) -> str:
+    """Preamble plus the role's own contract, as one system prompt."""
+    if role not in ROLES:
+        raise AgentError(f"unknown role {role!r}; known: {', '.join(ROLES)}")
     try:
         preamble = project.resolve(PREAMBLE).read_text(encoding="utf-8")
-        contract = project.resolve(f"agents/{agent}.md").read_text(encoding="utf-8")
+        contract = project.resolve(f"agents/{role}.md").read_text(encoding="utf-8")
     except FileNotFoundError as exc:
-        raise AgentError(f"{agent} has no contract: {exc}") from exc
+        raise AgentError(f"{role} has no contract: {exc}") from exc
     return f"{preamble}\n\n---\n\n{contract}"
 
 
@@ -423,6 +432,57 @@ RESULT_SCHEMAS: dict[str, dict[str, Any]] = {
         "files_considered": {"type": "array", "items": {"type": "string"}},
     }, ["files_touched", "files_considered"]),
 
+    # The project pass asks for more than a file list: "only what shipped
+    # affected" is checkable only if the agent says what drove each change and
+    # why it left the rest alone.
+    "documentation-project": _schema({
+        "project_type": {"type": "string",
+                         "description": "What you concluded this project is, from the evidence."},
+        "files_touched": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"path": {"type": "string"},
+                               "change": {"type": "string"},
+                               "driven_by": {"type": "string",
+                                             "description": "Shipped ticket id(s) that made this necessary."}},
+                "required": ["path", "change", "driven_by"],
+                "additionalProperties": False,
+            },
+        },
+        "files_considered": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"path": {"type": "string"},
+                               "reason_left_alone": {"type": "string"}},
+                "required": ["path", "reason_left_alone"],
+                "additionalProperties": False,
+            },
+        },
+        "inferred_docs": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"path": {"type": "string"},
+                               "justification": {"type": "string"}},
+                "required": ["path", "justification"],
+                "additionalProperties": False,
+            },
+        },
+        "examples_run": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"command": {"type": "string"},
+                               "exit_code": {"type": "integer"}},
+                "required": ["command", "exit_code"],
+                "additionalProperties": False,
+            },
+        },
+    }, ["project_type", "files_touched", "files_considered", "inferred_docs",
+        "examples_run"]),
+
     "devops": _schema({
         "areas": {
             "type": "array",
@@ -465,9 +525,15 @@ def run(agent: str, *, project: Project, root: Path, executor: Executor,
         user_prompt: str, registry: Registry, model: str | None = None,
         index: ContextIndex | None = None, shell: str = "sh",
         max_turns: int = 60, max_tokens: int = 32000,
-        on_tool=None) -> AgentResult:
-    """Run one agent to completion against one worktree."""
-    system = load_contract(project, agent)
+        role: str | None = None, on_tool=None) -> AgentResult:
+    """Run one agent to completion against one worktree.
+
+    ``role`` selects the contract and result schema when an agent has more than
+    one mission; it defaults to the agent's own name. Write scope, model and
+    report filename always follow the *agent*, never the role.
+    """
+    role = role or agent
+    system = load_contract(project, role)
     chosen = registry.validate(model) if model else registry.default_for(agent)
     effort = registry.effort_for(agent)
 
@@ -477,11 +543,11 @@ def run(agent: str, *, project: Project, root: Path, executor: Executor,
     try:
         result, transcript = llm.agentic(
             system=system, user=user_prompt, tools=tools_for(agent),
-            dispatch=box.dispatch, schema=RESULT_SCHEMAS[agent],
+            dispatch=box.dispatch, schema=RESULT_SCHEMAS[role],
             max_turns=max_turns, max_tokens=max_tokens, on_tool=on_tool,
         )
     except LLMError as exc:
-        raise AgentError(f"{agent} failed: {exc}") from exc
+        raise AgentError(f"{role} failed: {exc}") from exc
 
     return AgentResult(agent=agent, model=chosen, effort=effort, result=result,
                        transcript=transcript, violations=list(box.violations))

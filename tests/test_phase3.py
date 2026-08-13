@@ -82,8 +82,8 @@ def test_contract_includes_the_shared_preamble(project):
     assert "Agents decide." in contract
 
 
-def test_unknown_agent_is_refused(project):
-    with pytest.raises(AgentError, match="unknown agent"):
+def test_unknown_role_is_refused(project):
+    with pytest.raises(AgentError, match="unknown role"):
         agents.load_contract(project, "wizard")
 
 

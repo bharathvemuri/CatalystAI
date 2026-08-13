@@ -26,6 +26,7 @@ def empty_state() -> dict[str, Any]:
         "phase": "spec_review",
         "spec": {"status": "draft", "open_questions": 0, "revision": 0},
         "repo": None,
+        "documentation": None,
         "tasks": {},
         "human_approvals_pending": [],
     }
@@ -90,6 +91,21 @@ def apply(state: dict[str, Any], event: Event) -> dict[str, Any]:
             "url": p.get("url"),
             "created": bool(p.get("created")),
         }
+
+    elif t == "docs.pass_completed":
+        state["documentation"] = {
+            "ran_at": event.ts,
+            "base": p.get("base"),
+            "tickets_documented": p.get("tickets_documented", []),
+            "files_touched": p.get("files_touched", []),
+            "required_present": bool(p.get("required_present")),
+            "pr": (state.get("documentation") or {}).get("pr"),
+        }
+
+    elif t == "docs.pr_opened":
+        entry = state.get("documentation") or {}
+        entry["pr"] = {"number": p.get("number"), "url": p.get("url")}
+        state["documentation"] = entry
 
     elif t == "task.issue_reconciled":
         _task(state, p["task_id"])["issue_ref"] = p.get("issue_ref")

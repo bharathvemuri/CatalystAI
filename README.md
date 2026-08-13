@@ -21,7 +21,7 @@ Deviations from it: [`SPEC-AMENDMENTS.md`](SPEC-AMENDMENTS.md).
 | 1 — chunking | `chunk-specs` | **built** |
 | 2 — setup | `setup-project` | **built** (GitHub) |
 | 3 — execution | `run`, `run-ticket`, `approve` | **built** |
-| 4 — documentation | `write-documentation` | not started |
+| 4 — documentation | `write-documentation` | **built** |
 | 5 — production | TBD | not scoped |
 
 ## Install
@@ -280,6 +280,49 @@ In a target repository:
 
 Cross-project state (institutional-memory lessons) lives in `~/.ai-harness/`.
 
+## Phase 4 walkthrough
+
+Phase 3 already runs a Documentation agent per ticket, which keeps docs from
+drifting as each ticket lands. Phase 4 is the pass that reconciles those
+ticket-scoped edits into one coherent set and guarantees the top-level documents
+exist.
+
+```bash
+harness write-documentation --dry-run
+```
+
+The plan names the base ref it will document, every ticket that has shipped,
+every ticket withheld because it has not, and which of `README.md`,
+`ARCHITECTURE.md` and `CONTRIBUTING.md` are currently missing.
+
+**Only tickets a human approved or that are done are documented.** Everything
+else is withheld from the agent entirely — the Documentation contract's failure
+conditions include documenting behaviour that was not implemented, so the
+material simply is not offered.
+
+```bash
+harness write-documentation
+```
+
+Runs in its own worktree on `harness/docs`, container-isolated like any ticket,
+and ends by offering a draft pull request you confirm. `--base REF` documents
+something other than the current HEAD; `--no-pr` stops after committing.
+
+Two things are checked mechanically afterwards, because an agent's account of
+its own work is the last thing that should be taken on trust:
+
+- The three required documents are looked for **on disk**, not read out of the
+  report.
+- What the agent says it touched is compared against what `git` says changed.
+  A file changed without being declared, or declared without being changed, is
+  recorded as a contract violation and the command exits non-zero.
+
+One check happens before the pass instead. A ticket's work lives on its own
+branch until its pull request merges, so if the base does not contain a shipped
+ticket's commits, that ticket's code is not visible and the plan says so up
+front — rather than letting it surface later as documentation describing code
+that is not there.
+
 ## Customising
 
 Anything under `core/` can be overridden without forking. Drop a file at the
@@ -290,7 +333,7 @@ same relative path in `.harness/overrides/` (per project) or `~/.ai-harness/`
 - `prompts/chunk-specs.md` — how work is sliced
 - `model-registry.yaml` — which models and effort levels agents may use
 - `agents/<name>.md` — an agent's contract; `agents/_preamble.md` for rules
-  shared by all eight
+  shared by all eight; `agents/documentation-project.md` for the phase 4 pass
 - `gates/*.sh` — how build, test, lint and security scanning are actually run
 - `gates/thresholds.yaml` — coverage and performance limits, retry cap, which
   gates may be skipped
@@ -304,7 +347,8 @@ python -m pytest tests -q
 
 The suite covers the deterministic layer only — event log, state fold, Q&A
 round-trip, dependency-graph validation, contracts, registry enforcement, phase
-2 against a mocked tracker, and phase 3's contracts, write boundaries, gates,
-worktrees, context index and approval gate. It makes no API calls and no network
-calls of any kind; the gate scripts and git worktrees are exercised for real
-against temporary directories.
+2 against a mocked tracker, phase 3's contracts, write boundaries, gates,
+worktrees, context index and approval gate, and phase 4's shipped-ticket
+filtering, merge detection and self-verification. It makes no API calls and no
+network calls of any kind; the gate scripts and git worktrees are exercised for
+real against temporary directories.

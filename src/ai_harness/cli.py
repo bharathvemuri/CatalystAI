@@ -7,7 +7,7 @@ import sys
 
 from . import HARNESS_VERSION
 from .commands import (approve, chunk_specs, init, review_specs, run,
-                       setup_project, status)
+                       setup_project, status, write_documentation)
 from .commands._common import CommandError
 
 EPILOG = """\
@@ -24,10 +24,13 @@ phase 3 (implemented):
   run-ticket      drive one ticket through the pipeline
   approve         the human gate: read the evidence, then approve
 
+phase 4 (implemented):
+  write-documentation   document what shipped, across the whole project
+
 any time:
   status / log    read-only views over the event log
 
-phases 4-5 (documentation, production) are not built yet.
+phase 5 (production) is not built yet.
 """
 
 
@@ -48,6 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     setup_project.add_parser(subparsers)
     run.add_parser(subparsers)
     approve.add_parser(subparsers)
+    write_documentation.add_parser(subparsers)
     status.add_parser(subparsers)
     return parser
 

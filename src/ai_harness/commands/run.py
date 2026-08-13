@@ -70,7 +70,7 @@ def _shared_arguments(p: argparse.ArgumentParser) -> None:
 
 # ------------------------------------------------------------------ setup
 
-def _preconditions(project: Project, args) -> tuple[list[TaskFile], Registry, Thresholds]:
+def preconditions(project: Project, args) -> tuple[list[TaskFile], Registry, Thresholds]:
     state = fold(open_log(project))
     if state["spec"]["status"] != "approved":
         die("the spec is not approved yet. Run `harness review-specs --approve` first.")
@@ -96,9 +96,13 @@ def _preconditions(project: Project, args) -> tuple[list[TaskFile], Registry, Th
     return tasks, Registry.load(project), Thresholds.load(project)
 
 
-def _make_executor(project: Project, ticket: str, root: Path, args,
-                   log) -> tuple[Executor, str, str]:
-    """Returns the executor, the gates directory as it sees it, and a shell."""
+def make_executor(project: Project, ticket: str, root: Path, args,
+                  log) -> tuple[Executor, str, str]:
+    """Returns the executor, the gates directory as it sees it, and a shell.
+
+    Shared with the phase 4 documentation pass, which needs the same isolation
+    and the same waiver record for exactly the same reasons.
+    """
     gates_source = project.resolve("gates")
 
     if args.no_container:
@@ -145,7 +149,7 @@ def _drive(project: Project, task: TaskFile, args, registry: Registry,
     (worktree.path / ".devcontainer" / "devcontainer.json").write_text(
         containers.devcontainer_json(), encoding="utf-8")
 
-    executor, gates_dir, shell = _make_executor(project, task.id, worktree.path, args, log)
+    executor, gates_dir, shell = make_executor(project, task.id, worktree.path, args, log)
     try:
         engine = TicketPipeline(
             project, task, log=log, executor=executor, worktree=worktree,
@@ -180,7 +184,7 @@ def _report(outcome: TicketOutcome, project: Project) -> None:
 
 def run_ticket(args: argparse.Namespace) -> int:
     project = require_project()
-    tasks, registry, thresholds = _preconditions(project, args)
+    tasks, registry, thresholds = preconditions(project, args)
 
     task = next((t for t in tasks if t.id == args.ticket), None)
     if task is None:
@@ -213,7 +217,7 @@ def run_ticket(args: argparse.Namespace) -> int:
 
 def run_all(args: argparse.Namespace) -> int:
     project = require_project()
-    tasks, registry, thresholds = _preconditions(project, args)
+    tasks, registry, thresholds = preconditions(project, args)
 
     state = fold(open_log(project))
     ready = pipeline.ready_tickets(state, tasks)

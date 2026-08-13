@@ -53,7 +53,9 @@
         "ticket.gates_ran",
         "task.issue_linked",
         "task.human_approval_requested",
-        "task.human_approved"
+        "task.human_approved",
+        "docs.pass_completed",
+        "docs.pr_opened"
       ]
     },
     "payload": {

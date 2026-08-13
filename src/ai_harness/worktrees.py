@@ -134,6 +134,23 @@ def ensure(project: Project, ticket: str, base: str | None = None) -> Worktree:
     return Worktree(ticket=ticket, path=target, branch=branch)
 
 
+def is_merged(root: Path, branch: str, base: str) -> bool:
+    """Is every commit on ``branch`` already reachable from ``base``?
+
+    Phase 4 documents what shipped, but a ticket's work lives on its own branch
+    until the pull request is merged. A docs pass run against a base that does
+    not contain a ticket's commits cannot see that ticket's code, and would
+    otherwise document it from the reports alone as though it were there.
+    """
+    if not branch_exists(root, branch):
+        return False
+    try:
+        git(root, "merge-base", "--is-ancestor", branch, base)
+    except GitError:
+        return False
+    return True
+
+
 def is_dirty(worktree: Worktree) -> bool:
     return bool(git(worktree.path, "status", "--porcelain", check=False).strip())
 

@@ -44,6 +44,29 @@
         }
       }
     },
+    "documentation": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "description": "Outcome of the last phase 4 documentation pass. Null until `harness write-documentation` has run.",
+      "properties": {
+        "ran_at": { "type": "string" },
+        "base": { "type": ["string", "null"], "description": "Ref the pass documented." },
+        "tickets_documented": { "type": "array", "items": { "type": "string" } },
+        "files_touched": { "type": "array", "items": { "type": "string" } },
+        "required_present": {
+          "type": "boolean",
+          "description": "Whether README.md, ARCHITECTURE.md and CONTRIBUTING.md all existed when the pass ended. Checked on disk, not taken from the agent's report."
+        },
+        "pr": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "number": { "type": ["integer", "null"] },
+            "url": { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
     "tasks": {
       "type": "object",
       "propertyNames": { "pattern": "^T-[0-9]{3,}$" },
