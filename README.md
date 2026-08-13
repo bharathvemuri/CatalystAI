@@ -10,9 +10,6 @@ A standalone CLI that drives a specification from raw documents through review,
 chunking, implementation, and documentation, making its own model calls and
 recording every step in an auditable log.
 
-Architecture: [`harness-architecture.md`](harness-architecture.md).
-Deviations from it: [`SPEC-AMENDMENTS.md`](SPEC-AMENDMENTS.md).
-
 ## Status
 
 | Phase | Command | State |

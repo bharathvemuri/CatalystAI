@@ -30,6 +30,14 @@ htmlcov/
 .harness/worktrees/
 .harness/gitignore-suggestions
 
+# Working documents kept locally and deliberately out of version control:
+# the source specification, the record of deviations from it, the framework
+# document the agent contracts derive from, and the running TODO log.
+SPEC-AMENDMENTS.md
+TODO.md
+harness-architecture.md
+ai-engineering-framework-deterministic-agent-goals.md
+
 # Editors / OS
 .vscode/
 .idea/
