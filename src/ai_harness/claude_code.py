@@ -196,7 +196,11 @@ class ClaudeCodeRunner:
             cli_path=cli,
             system_prompt=system,
             mcp_servers={MCP_SERVER: server},
-            allowed_tools=allowed,
+            # Deliberately no allowed_tools. An entry there auto-approves the
+            # tool *before* can_use_tool is consulted, which would shadow the
+            # callback and leave the allowlist as the only real gate. Routing
+            # every call through the callback keeps one boundary instead of two
+            # that can disagree.
             disallowed_tools=list(BUILTIN_TOOLS),
             can_use_tool=_only_harness_tools(sdk, set(allowed)),
             # The agent's contract is its whole system prompt. Without this the
@@ -208,19 +212,28 @@ class ClaudeCodeRunner:
         )
 
         terminal = ""
+        failure = ""
         try:
-            async for message in sdk.query(prompt=user, options=options):
+            async for message in sdk.query(prompt=_stream_once(user), options=options):
                 reason = getattr(message, "terminal_reason", None)
                 if reason:
                     terminal = str(reason)
+                # The CLI reports its own failures in the result frame, and the
+                # exception the SDK raises afterwards says only "error result:
+                # <subtype>" — which for an auth failure reads "success". The
+                # frame is where the actionable text lives, so it is kept.
+                if getattr(message, "is_error", False):
+                    failure = str(getattr(message, "result", "") or "").strip()
         except LLMError:
             raise
         except Exception as exc:
             # The SDK reaches a CLI subprocess, so failures arrive as anything
             # from a missing binary to a transport decode error. Every one of
             # them is the same thing to the pipeline: this agent did not run.
-            raise LLMError(f"the Claude Code runner failed: "
-                           f"{type(exc).__name__}: {exc}") from exc
+            raise LLMError(_failed(failure, f"{type(exc).__name__}: {exc}")) from exc
+
+        if failure:
+            raise LLMError(_failed(failure, ""))
 
         if SUBMIT_TOOL not in captured:
             raise LLMError(
@@ -269,6 +282,43 @@ class ClaudeCodeRunner:
             return {"content": [{"type": "text", "text": "accepted"}]}
 
         return sdk.tool(SUBMIT_TOOL, SUBMIT_DESCRIPTION, schema)(handler)
+
+
+NOT_LOGGED_IN = (
+    "The Claude Code CLI is installed but not logged in, so it has no "
+    "credentials to run an agent with.\n"
+    "  Run `claude` once and complete the login, then re-run this command.\n"
+    "  Or use an API key instead: --runner api, with ANTHROPIC_API_KEY set."
+)
+
+
+def _failed(reported: str, fallback: str) -> str:
+    """Prefer the CLI's own account of what went wrong.
+
+    Authentication is the failure a first run is most likely to hit, and the
+    CLI's wording for it points at a slash command that does not exist outside
+    its own REPL — so that one case is translated into the step that works here.
+    """
+    detail = reported or fallback or "no detail was reported"
+    if reported and ("not logged in" in reported.lower()
+                     or "/login" in reported.lower()):
+        return f"{NOT_LOGGED_IN}\n\n(the CLI reported: {reported})"
+    return f"the Claude Code runner failed: {detail}"
+
+
+async def _stream_once(text: str):
+    """The single user turn, as the stream the SDK insists on.
+
+    A plain string would be simpler and is what ``query`` accepts by default,
+    but the SDK refuses a ``can_use_tool`` callback outside streaming mode. That
+    callback is the deny-by-default boundary keeping agents off the built-in
+    tools, so streaming is the price of the enforcement rather than a
+    preference. The shape mirrors what the SDK builds for a string prompt;
+    ``session_id`` is filled in by the transport.
+    """
+    yield {"type": "user",
+           "message": {"role": "user", "content": text},
+           "parent_tool_use_id": None}
 
 
 def _only_harness_tools(sdk, allowed: set[str]):

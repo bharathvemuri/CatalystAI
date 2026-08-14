@@ -15,6 +15,7 @@ of the agent's system prompt.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 
@@ -110,6 +111,14 @@ def install_fake_sdk(monkeypatch, script):
 
     async def query(*, prompt, options):
         module.options = options
+        # The real SDK refuses a can_use_tool callback outside streaming mode.
+        # The stand-in enforces it too: a fake that accepts what the real one
+        # rejects is how a working test suite ships a broken runner.
+        if options.can_use_tool is not None and isinstance(prompt, str):
+            raise ValueError("can_use_tool callback requires streaming mode. "
+                             "Please provide prompt as an AsyncIterable instead "
+                             "of a string.")
+        module.prompt_messages = [message async for message in prompt]
         server = options.mcp_servers[MCP_SERVER]
         for name, args in script:
             decision = await options.can_use_tool(name, args, None)
@@ -260,6 +269,24 @@ def test_a_missing_cli_stops_the_run_before_the_sdk_is_asked(monkeypatch):
     assert "Claude Code CLI was not found" in str(exc.value)
 
 
+def test_the_user_turn_is_streamed_not_passed_as_a_string(monkeypatch):
+    """The SDK rejects a can_use_tool callback outside streaming mode, and that
+    callback is the boundary keeping agents off the built-in tools. Streaming is
+    therefore load-bearing, not stylistic."""
+    module = install_fake_sdk(monkeypatch, [
+        (f"mcp__{MCP_SERVER}__{SUBMIT_TOOL}", {"status": "complete", "summary": "ok"}),
+    ])
+    ClaudeCodeRunner(model="claude-opus-5").structured(
+        system="s", user="review this", schema=SCHEMA)
+
+    assert module.options.can_use_tool is not None
+    assert module.prompt_messages == [{
+        "type": "user",
+        "message": {"role": "user", "content": "review this"},
+        "parent_tool_use_id": None,
+    }]
+
+
 def test_the_resolved_cli_path_is_handed_to_the_sdk(monkeypatch):
     """Finding it is not enough — the SDK spawns the CLI and does its own PATH
     lookup, which is exactly what failed."""
@@ -354,7 +381,14 @@ def test_structured_calls_work_without_any_tools(monkeypatch):
         system="prompt", user="review this", schema=SCHEMA)
 
     assert result == {"status": "complete", "summary": "ok"}
-    assert list(module.options.allowed_tools) == [f"mcp__{MCP_SERVER}__{SUBMIT_TOOL}"]
+
+    # No allowed_tools entry: one there auto-approves the tool before
+    # can_use_tool is consulted, which would shadow the callback and leave the
+    # allowlist as the real gate. The callback has to be the only one.
+    assert getattr(module.options, "allowed_tools", None) is None
+    permit = module.options.can_use_tool
+    assert asyncio.run(permit(f"mcp__{MCP_SERVER}__{SUBMIT_TOOL}", {}, None)).denied is False
+    assert asyncio.run(permit("Bash", {"command": "rm -rf /"}, None)).denied is True
 
 
 def test_ending_without_a_result_is_an_error(monkeypatch):
