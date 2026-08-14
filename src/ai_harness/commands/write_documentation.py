@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import argparse
 
-from .. import agents, containers, trackers, worktrees
+from .. import agents, containers, runner as runners, trackers, worktrees
 from ..agents import AgentError, AgentResult
 from ..context_index import ContextIndex, ContextIndexUnavailable
 from ..paths import Project
@@ -82,6 +82,7 @@ def add_parser(subparsers) -> None:
                    help="check preconditions and print the plan, then stop")
     p.add_argument("--yes", action="store_true",
                    help="skip the confirmation prompt")
+    runners.add_argument(p)
     p.set_defaults(func=run)
 
 
@@ -194,13 +195,14 @@ def _verify(result: AgentResult, worktree, base: str) -> tuple[list[str], list[s
 
 
 def _print_plan(project: Project, shipped: list[TaskFile], outstanding: list[TaskFile],
-                unmerged: list[str], base: str, args) -> None:
+                unmerged: list[str], base: str, args, backend: str) -> None:
     isolation = "host (isolation waived)" if args.no_container else "devcontainer"
     missing = _missing_required(project.root)
 
     info("")
     info("Plan  (phase 4 documentation)")
     info("")
+    info(f"  runner       {runners.describe(backend) if backend else 'none available'}")
     info(f"  isolation    {isolation}")
     info(f"  base         {base}")
     info(f"  worktree     {rel(worktrees.path_for(project, DOCS_NAME), project.root)} "
@@ -228,7 +230,7 @@ def _print_plan(project: Project, shipped: list[TaskFile], outstanding: list[Tas
 
 def run(args: argparse.Namespace) -> int:
     project = require_project()
-    tasks, registry, _thresholds = preconditions(project, args)
+    tasks, registry, _thresholds, backend = preconditions(project, args)
 
     log = open_log(project)
     state = fold(log)
@@ -246,7 +248,7 @@ def run(args: argparse.Namespace) -> int:
     except GitError as exc:
         raise CommandError(str(exc)) from exc
 
-    _print_plan(project, shipped, outstanding, unmerged, base, args)
+    _print_plan(project, shipped, outstanding, unmerged, base, args, backend)
 
     if args.dry_run:
         info("")
@@ -256,11 +258,11 @@ def run(args: argparse.Namespace) -> int:
         info("Aborted.")
         return 1
 
-    return _drive(project, shipped, base, unmerged, registry, args)
+    return _drive(project, shipped, base, unmerged, registry, args, backend)
 
 
 def _drive(project: Project, shipped: list[TaskFile], base: str,
-           unmerged: list[str], registry: Registry, args) -> int:
+           unmerged: list[str], registry: Registry, args, backend: str) -> int:
     log = open_log(project)
     try:
         worktree = worktrees.ensure(project, DOCS_NAME, base=base)
@@ -276,9 +278,11 @@ def _drive(project: Project, shipped: list[TaskFile], base: str,
 
     (worktree.path / ".devcontainer").mkdir(parents=True, exist_ok=True)
     (worktree.path / ".devcontainer" / "devcontainer.json").write_text(
-        containers.devcontainer_json(), encoding="utf-8")
+        containers.devcontainer_json(containers.image_tag(project.resolve("Dockerfile"))),
+        encoding="utf-8")
 
-    executor, _gates_dir, shell = make_executor(project, DOCS_NAME, worktree.path, args, log)
+    executor, _gates_dir, _report_dir, shell = make_executor(
+        project, DOCS_NAME, worktree.path, args, log)
 
     index = None
     try:
@@ -297,6 +301,7 @@ def _drive(project: Project, shipped: list[TaskFile], base: str,
             project=project, root=worktree.path, executor=executor,
             user_prompt=_prompt(project, shipped, base, unmerged, worktree),
             registry=registry, index=index, shell=shell, max_turns=80,
+            backend=backend,
         )
     except AgentError as exc:
         raise CommandError(str(exc)) from exc

@@ -13,11 +13,12 @@ from typing import Any
 
 import yaml
 
-from .. import contracts, loaders, taskfile
+from .. import contracts, loaders, runner as runners, taskfile
 from ..contracts import ContractViolation
-from ..llm import NO_CREDENTIALS, LLM, LLMError, credentials_available
+from ..llm import LLMError
 from ..paths import Project
 from ..registry import Registry
+from ..runner import RunnerUnavailable
 from ..state import fold
 from ._common import (CommandError, die, info, open_log, read_config, rel,
                       require_project, sync_state)
@@ -71,6 +72,7 @@ def add_parser(subparsers) -> None:
                    help="overwrite existing task files")
     p.add_argument("--dry-run", action="store_true",
                    help="validate and print the plan without writing anything")
+    runners.add_argument(p)
     p.set_defaults(func=run)
 
 
@@ -152,9 +154,12 @@ def run(args: argparse.Namespace) -> int:
 
     registry = Registry.load(project)
     model = registry.validate(args.model) if args.model else registry.default_for("architect")
-    if not credentials_available():
-        die(NO_CREDENTIALS)
-    llm = LLM(model=model, effort=registry.effort_for("architect"), registry=registry)
+    try:
+        backend = runners.select(getattr(args, "runner", None))
+    except RunnerUnavailable as exc:
+        die(str(exc))
+    llm = runners.build(backend, model=model,
+                        effort=registry.effort_for("architect"), registry=registry)
 
     system = project.resolve("prompts/chunk-specs.md").read_text(encoding="utf-8")
     user_parts = []
@@ -171,7 +176,8 @@ def run(args: argparse.Namespace) -> int:
         "Produce the task breakdown.",
     ]
 
-    info(f"Chunking with {model} (effort={registry.effort_for('architect')})…")
+    detail = f", effort={llm.effort}" if llm.effort else ""
+    info(f"Chunking with {model} via {llm.backend}{detail}…")
     try:
         result = llm.structured(system=system, user="\n".join(user_parts),
                                 schema=CHUNK_SCHEMA, max_tokens=32000)

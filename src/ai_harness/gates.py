@@ -92,17 +92,31 @@ def report_dir_for(project: Project, ticket: str) -> Path:
 
 
 def relative_report_dir(ticket: str) -> str:
-    """Report path as the gate script sees it — relative, so it means the same
-    thing on the host and inside the container."""
+    """Deprecated: a path relative to the working directory.
+
+    This was wrong in both execution modes and is kept only so an override that
+    imported it does not break. The working directory is the *ticket worktree*,
+    not the project root, so ``.harness/reports/<id>`` resolved to a second,
+    nested ``.harness`` inside the worktree — which the harness never reads and
+    ``worktrees.remove`` deletes along with the tree. Gate evidence went into it
+    and disappeared. Callers pass an explicit ``report_dir`` now; see
+    ``run.report_dir_for_executor``.
+    """
     return f".harness/reports/{ticket}"
 
 
 def run_gate(name: str, executor: Executor, *, ticket: str, gates_dir: str,
-             shell: str = "sh", project: Project | None = None,
+             report_dir: str, shell: str = "sh", project: Project | None = None,
              timeout: int = 1800) -> GateResult:
-    """Run one gate script and return its validated result."""
+    """Run one gate script and return its validated result.
+
+    ``report_dir`` is where the script should write evidence, expressed as the
+    *executor* sees it: a host path under host execution, and the container's
+    writable mount point under Docker. It has to be passed in rather than
+    derived, because only the caller knows which of those it built.
+    """
     env = {
-        "HARNESS_REPORT_DIR": relative_report_dir(ticket),
+        "HARNESS_REPORT_DIR": report_dir,
         "HARNESS_GATE": name,
         "HARNESS_TICKET": ticket,
     }
@@ -136,10 +150,11 @@ def run_gate(name: str, executor: Executor, *, ticket: str, gates_dir: str,
     return GateResult.from_dict(payload)
 
 
-def run_all(executor: Executor, *, ticket: str, gates_dir: str, project: Project,
-            names: tuple[str, ...] = GATE_NAMES, shell: str = "sh") -> list[GateResult]:
+def run_all(executor: Executor, *, ticket: str, gates_dir: str, report_dir: str,
+            project: Project, names: tuple[str, ...] = GATE_NAMES,
+            shell: str = "sh") -> list[GateResult]:
     return [run_gate(name, executor, ticket=ticket, gates_dir=gates_dir,
-                     shell=shell, project=project)
+                     report_dir=report_dir, shell=shell, project=project)
             for name in names]
 
 

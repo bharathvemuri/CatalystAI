@@ -43,8 +43,12 @@ RUN pip install --no-cache-dir semgrep pip-audit ruff pytest
 # offline, no external service.
 RUN pip install --no-cache-dir tree-sitter tree-sitter-language-pack
 
-# The harness runtime itself, so gate scripts and agent tooling can call it.
-COPY . /opt/ai-harness/core
-RUN pip install --no-cache-dir ai-harness || true
+# Deliberately no harness runtime in here. Gate scripts are POSIX shell and call
+# nothing from the package, and the gates themselves arrive as a read-only bind
+# mount at /harness/gates rather than a copied layer — so they are whatever the
+# host resolved through the three content tiers, not a stale snapshot baked in
+# at image-build time. An earlier version ran `pip install ai-harness || true`
+# here, which could only ever have installed an unrelated package of that name
+# from PyPI, and silently succeeded when it installed nothing at all.
 
 WORKDIR /workspace

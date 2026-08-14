@@ -11,12 +11,13 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .. import loaders, qa_round
+from .. import loaders, qa_round, runner as runners
 from ..events import Event, utcnow
-from ..llm import NO_CREDENTIALS, LLM, LLMError, credentials_available
+from ..llm import LLMError
 from ..qa_round import Answer, Question
 from ..paths import Project
 from ..registry import Registry
+from ..runner import Runner, RunnerUnavailable
 from ..state import fold
 from ._common import (CommandError, confirm, die, info, open_log, read_config,
                       rel, sync_state, warn, write_config)
@@ -68,6 +69,7 @@ def add_parser(subparsers) -> None:
                    help="override the registry default for this run")
     p.add_argument("--max-rounds", type=int, default=10, metavar="N",
                    help="safety cap on interactive rounds (default: 10)")
+    runners.add_argument(p)
     p.set_defaults(func=run)
 
 
@@ -137,15 +139,18 @@ def _load_docs(project: Project, directory: Path) -> str:
 
 # --------------------------------------------------------------------- review
 
-def _build_llm(project: Project, args: argparse.Namespace) -> LLM:
+def _build_runner(project: Project, args: argparse.Namespace) -> Runner:
     registry = Registry.load(project)
     model = registry.validate(args.model) if args.model else registry.default_for("architect")
-    if not credentials_available():
-        die(NO_CREDENTIALS)
-    return LLM(model=model, effort=registry.effort_for("architect"), registry=registry)
+    try:
+        backend = runners.select(getattr(args, "runner", None))
+    except RunnerUnavailable as exc:
+        die(str(exc))
+    return runners.build(backend, model=model,
+                         effort=registry.effort_for("architect"), registry=registry)
 
 
-def _run_review(project: Project, llm: LLM, docs_block: str) -> tuple[list[Question], str]:
+def _run_review(project: Project, llm: Runner, docs_block: str) -> tuple[list[Question], str]:
     system = project.resolve("prompts/review-specs.md").read_text(encoding="utf-8")
 
     accumulated = ""
@@ -166,7 +171,8 @@ def _run_review(project: Project, llm: LLM, docs_block: str) -> tuple[list[Quest
         ]
     parts += ["", "Review the specification and return your questions."]
 
-    info(f"Reviewing with {llm.model} (effort={llm.effort})…")
+    detail = f", effort={llm.effort}" if llm.effort else ""
+    info(f"Reviewing with {llm.model} via {llm.backend}{detail}…")
     result = llm.structured(system=system, user="\n".join(parts), schema=REVIEW_SCHEMA)
     questions = [Question.from_model(q) for q in result.get("questions", [])]
     return questions, result.get("assessment", "")
@@ -304,7 +310,7 @@ def run(args: argparse.Namespace) -> int:
 
     docs_dir = _docs_dir(project, args)
     docs_block = _load_docs(project, docs_dir)
-    llm = _build_llm(project, args)
+    llm = _build_runner(project, args)
 
     round_no = _last_round_number(log.read_all())
     rounds_run = 0

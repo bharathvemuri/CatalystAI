@@ -1,8 +1,13 @@
-"""Anthropic API adapter.
+"""Anthropic API adapter — the ``api`` backend.
 
-The only place in the harness that knows about a model provider. Everything
-above it deals in ``structured()`` calls with a JSON Schema and gets back a
-validated dict.
+One of two implementations of the ``Runner`` protocol in ``runner.py``; the
+other, ``claude_code.py``, drives a Claude Code subscription instead. Everything
+above either of them deals in ``structured()`` calls with a JSON Schema and gets
+back a validated dict.
+
+What is specific to this one is that the *model* is constrained to the schema
+(``output_config.format``) and per-agent effort is a real request parameter.
+Both are why this stays the preferred backend when a key is available.
 """
 
 from __future__ import annotations
@@ -53,7 +58,14 @@ def credentials_available() -> bool:
 
 
 class LLM:
-    """Thin wrapper: one structured, schema-validated call."""
+    """Thin wrapper: one structured, schema-validated call.
+
+    This is the ``api`` backend of the ``Runner`` protocol in ``runner.py``; it
+    satisfied that protocol before the protocol existed, which is why adding a
+    second backend needed nothing here but this attribute.
+    """
+
+    backend = "api"
 
     def __init__(self, model: str, effort: str = "high", registry: Registry | None = None):
         if registry is not None:

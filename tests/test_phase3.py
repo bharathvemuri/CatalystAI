@@ -205,14 +205,14 @@ def test_gate_result_must_satisfy_its_contract(project):
         "/g/build.sh": ('{"gate":"build","status":"pass","exit_code":0,'
                         '"summary":"build succeeded","command":"make"}\n', 0)})
     result = gates.run_gate("build", executor, ticket="T-001", gates_dir="/g",
-                            project=project)
+                            report_dir="/r", project=project)
     assert result.passed and result.summary == "build succeeded"
 
 
 def test_unparseable_gate_output_is_a_failure_not_a_pass(project):
     executor = RecordingExecutor(project.root, results={"/g/build.sh": ("chatter\n", 0)})
     result = gates.run_gate("build", executor, ticket="T-001", gates_dir="/g",
-                            project=project)
+                            report_dir="/r", project=project)
     assert result.status == "fail" and "no parseable result" in result.summary
 
 
@@ -220,7 +220,7 @@ def test_gate_result_violating_its_contract_is_a_failure(project):
     executor = RecordingExecutor(project.root, results={
         "/g/build.sh": ('{"gate":"build","status":"maybe","exit_code":0,"summary":"x"}\n', 0)})
     result = gates.run_gate("build", executor, ticket="T-001", gates_dir="/g",
-                            project=project)
+                            report_dir="/r", project=project)
     assert result.status == "fail" and "contract" in result.summary
 
 
@@ -229,7 +229,7 @@ def test_noise_on_stdout_cannot_corrupt_the_result(project):
     executor = RecordingExecutor(project.root, results={
         "/g/test.sh": (f"building...\n{{not json}}\n{payload}\n", 0)})
     result = gates.run_gate("test", executor, ticket="T-001", gates_dir="/g",
-                            project=project)
+                            report_dir="/r", project=project)
     assert result.passed
 
 
@@ -278,12 +278,14 @@ def test_gate_scripts_actually_run(project, tmp_path):
 
     executor = HostExecutor(root=workdir)
     gates_dir = project.resolve("gates").as_posix()
+    reports = tmp_path / "reports" / "T-001"
     result = gates.run_gate("build", executor, ticket="T-001", gates_dir=gates_dir,
+                            report_dir=reports.as_posix(),
                             project=project, shell=posix_shell())
 
     assert result.gate == "build"
     assert result.status == "pass", result.summary
-    evidence = workdir / ".harness" / "reports" / "T-001" / "evidence" / "build.log"
+    evidence = reports / "evidence" / "build.log"
     assert evidence.is_file() and "compileall" in evidence.read_text(encoding="utf-8")
 
 
@@ -296,6 +298,7 @@ def test_build_gate_fails_on_broken_source(project, tmp_path):
 
     result = gates.run_gate("build", HostExecutor(root=workdir), ticket="T-002",
                             gates_dir=project.resolve("gates").as_posix(),
+                            report_dir=(tmp_path / "reports").as_posix(),
                             project=project, shell=posix_shell())
     assert result.status == "fail"
 
@@ -406,7 +409,7 @@ def _pipeline(project, git_project=None):
         executor=RecordingExecutor(project.root),
         worktree=worktrees.Worktree("T-001", project.root, "harness/T-001"),
         registry=Registry.load(project), thresholds=Thresholds.load(project),
-        gates_dir="/g")
+        gates_dir="/g", report_dir="/r")
 
 
 def _agent_result(agent, **fields):
@@ -567,6 +570,63 @@ def test_approving_records_it_in_the_log(project, monkeypatch):
     state = fold(EventLog(project.events))
     assert state["tasks"]["T-001"]["status"] == "human_approved"
     assert state["human_approvals_pending"] == []
+
+
+# ------------------------------------------------- reaching the worktree
+
+def _ticket_branch_with_work(project: Project, ticket: str = "T-001"):
+    """A ticket whose work is committed on its branch, as after a real run."""
+    worktree = worktrees.ensure(project, ticket)
+    (worktree.path / "feature.py").write_text("shipped\n", encoding="utf-8")
+    worktrees.commit_all(worktree, f"{ticket}: work")
+    return worktree
+
+
+def test_the_gate_recreates_a_worktree_that_run_removed(git_project):
+    """`harness run` deletes the tree unless --keep-worktree; the work survives
+    on the branch. The gate reconstructs it rather than requiring the user to
+    have anticipated this two commands earlier."""
+    _ticket_branch_with_work(git_project)
+    worktrees.remove(git_project, "T-001")
+    assert worktrees.existing(git_project) == []
+
+    reached, borrowed = approve._reach_worktree(git_project, "T-001")
+    assert borrowed is True
+    assert (reached.path / "feature.py").is_file()
+
+
+def test_a_worktree_that_is_already_there_is_not_borrowed(git_project):
+    worktree = _ticket_branch_with_work(git_project)
+    reached, borrowed = approve._reach_worktree(git_project, "T-001")
+    assert borrowed is False and reached.path == worktree.path
+
+
+def test_no_branch_at_all_is_a_clean_skip(git_project):
+    reached, borrowed = approve._reach_worktree(git_project, "T-404")
+    assert reached is None and borrowed is False
+
+
+def test_a_borrowed_worktree_is_put_back(git_project, monkeypatch):
+    """The gate should leave the repository as it found it, or the next `run`
+    inherits trees nobody asked for."""
+    _ticket_branch_with_work(git_project)
+    worktrees.remove(git_project, "T-001")
+
+    seen = {}
+    monkeypatch.setattr(approve, "_offer_pull_request",
+                        lambda project, ticket, worktree: seen.update(branch=worktree.branch))
+    approve._post_approval(git_project, "T-001", type("A", (), {"no_pr": False})())
+
+    assert seen["branch"] == "harness/T-001"
+    assert worktrees.existing(git_project) == []
+
+
+def test_no_pr_never_touches_the_worktree(git_project, monkeypatch):
+    worktree = _ticket_branch_with_work(git_project)
+    monkeypatch.setattr(approve, "_reach_worktree",
+                        lambda *a: pytest.fail("should not have been called"))
+    approve._post_approval(git_project, "T-001", type("A", (), {"no_pr": True})())
+    assert worktree.path.is_dir()
 
 
 # ------------------------------------------------------------- thresholds

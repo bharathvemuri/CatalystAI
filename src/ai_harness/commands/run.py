@@ -17,14 +17,14 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .. import containers, gates, pipeline, taskfile, worktrees
+from .. import containers, gates, pipeline, runner as runners, taskfile, worktrees
 from ..containers import NO_DOCKER, DockerExecutor, docker_available
 from ..context_index import NO_TREE_SITTER, available as index_available
 from ..execution import Executor, HostExecutor, posix_shell
-from ..llm import NO_CREDENTIALS, credentials_available
 from ..paths import Project
 from ..pipeline import PipelineError, TicketPipeline, TicketOutcome
 from ..registry import Registry
+from ..runner import RunnerUnavailable
 from ..state import fold
 from ..taskfile import TaskFile, TaskFileError
 from ..thresholds import Thresholds
@@ -66,11 +66,13 @@ def _shared_arguments(p: argparse.ArgumentParser) -> None:
                    help="check preconditions and print the plan, then stop")
     p.add_argument("--yes", action="store_true",
                    help="skip the confirmation prompt")
+    runners.add_argument(p)
 
 
 # ------------------------------------------------------------------ setup
 
-def preconditions(project: Project, args) -> tuple[list[TaskFile], Registry, Thresholds]:
+def preconditions(project: Project, args
+                  ) -> tuple[list[TaskFile], Registry, Thresholds, str]:
     state = fold(open_log(project))
     if state["spec"]["status"] != "approved":
         die("the spec is not approved yet. Run `harness review-specs --approve` first.")
@@ -86,24 +88,40 @@ def preconditions(project: Project, args) -> tuple[list[TaskFile], Registry, Thr
         die(f"{project.root} is not a git repository.\n"
             "Phase 3 runs each ticket in its own git worktree.")
 
-    if not args.dry_run and not credentials_available():
-        die(NO_CREDENTIALS)
+    # A dry run still resolves the backend, because "which model calls would
+    # this make, billed to what" is exactly what a plan is for. It just does
+    # not fail the command when none is configured.
+    try:
+        backend = runners.select(getattr(args, "runner", None))
+    except RunnerUnavailable as exc:
+        if not args.dry_run:
+            die(str(exc))
+        backend = ""
 
     if not index_available():
         warn(f"the context index is unavailable, so agents will read files directly.\n"
              f"{NO_TREE_SITTER}")
 
-    return tasks, Registry.load(project), Thresholds.load(project)
+    return tasks, Registry.load(project), Thresholds.load(project), backend
 
 
 def make_executor(project: Project, ticket: str, root: Path, args,
-                  log) -> tuple[Executor, str, str]:
-    """Returns the executor, the gates directory as it sees it, and a shell.
+                  log) -> tuple[Executor, str, str, str]:
+    """Returns the executor, the gates directory and report directory as it
+    sees them, and a shell.
+
+    The two directories are returned rather than derived by the caller because
+    they name the same places from different sides of a mount: on the host they
+    are host paths, and inside a container they are mount points.
 
     Shared with the phase 4 documentation pass, which needs the same isolation
     and the same waiver record for exactly the same reasons.
     """
     gates_source = project.resolve("gates")
+    reports_source = project.reports / ticket
+    # The gate scripts write into it, so it has to exist before the mount: Docker
+    # would otherwise create it as a root-owned directory on the host.
+    reports_source.mkdir(parents=True, exist_ok=True)
 
     if args.no_container:
         shell = posix_shell()
@@ -114,24 +132,43 @@ def make_executor(project: Project, ticket: str, root: Path, args,
             "task_id": ticket, "reason": "--no-container",
             "detail": "gates and agent commands ran directly on the host",
         }, stream=ticket)
-        return HostExecutor(root=root), gates_source.as_posix(), shell
+        return (HostExecutor(root=root), gates_source.as_posix(),
+                reports_source.as_posix(), shell)
 
     ok, detail = docker_available()
     if not ok:
         die(f"{NO_DOCKER}\n({detail})")
 
-    executor = DockerExecutor(root=root, ticket=ticket,
-                              extra_mounts={gates_source: gates.GATES_MOUNT})
+    executor = DockerExecutor(root=root, ticket=ticket, extra_mounts={
+        gates_source: (gates.GATES_MOUNT, "ro"),
+        reports_source: (containers.REPORTS_MOUNT, "rw"),
+    })
     executor.ensure_image(project.resolve("Dockerfile"))
     executor.start()
+    _bootstrap(executor, ticket, root)
+    return executor, gates.GATES_MOUNT, containers.REPORTS_MOUNT, "sh"
+
+
+def _bootstrap(executor: Executor, ticket: str, root: Path) -> None:
+    """Install what the repository declares, and stop if that fails.
+
+    A discarded bootstrap failure is worse than a loud one: the build gate fails
+    later for a reason that has nothing to do with the code, and the evidence
+    the Reviewer reads describes a symptom rather than the cause.
+    """
     for command in containers.bootstrap_commands(root):
         info(f"  {ticket}  bootstrap: {' '.join(command)}")
-        executor.run(command)
-    return executor, gates.GATES_MOUNT, "sh"
+        outcome = executor.run(command)
+        if not outcome.ok:
+            tail = ((outcome.stderr or "") + (outcome.stdout or "")).strip()[-2000:]
+            die(f"{ticket}: bootstrap command {' '.join(command)!r} failed with "
+                f"exit {outcome.exit_code}. The container's environment is not "
+                f"what the repository declares, so nothing after this would mean "
+                f"anything.\n\n{tail}")
 
 
 def _drive(project: Project, task: TaskFile, args, registry: Registry,
-           thresholds: Thresholds) -> TicketOutcome:
+           thresholds: Thresholds, backend: str) -> TicketOutcome:
     log = open_log(project)
     try:
         worktree = worktrees.ensure(project, task.id)
@@ -147,14 +184,16 @@ def _drive(project: Project, task: TaskFile, args, registry: Registry,
 
     (worktree.path / ".devcontainer").mkdir(parents=True, exist_ok=True)
     (worktree.path / ".devcontainer" / "devcontainer.json").write_text(
-        containers.devcontainer_json(), encoding="utf-8")
+        containers.devcontainer_json(containers.image_tag(project.resolve("Dockerfile"))),
+        encoding="utf-8")
 
-    executor, gates_dir, shell = make_executor(project, task.id, worktree.path, args, log)
+    executor, gates_dir, report_dir, shell = make_executor(
+        project, task.id, worktree.path, args, log)
     try:
         engine = TicketPipeline(
             project, task, log=log, executor=executor, worktree=worktree,
             registry=registry, thresholds=thresholds, gates_dir=gates_dir,
-            shell=shell, announce=info)
+            report_dir=report_dir, shell=shell, backend=backend, announce=info)
         return engine.run()
     finally:
         executor.dispose()
@@ -184,7 +223,7 @@ def _report(outcome: TicketOutcome, project: Project) -> None:
 
 def run_ticket(args: argparse.Namespace) -> int:
     project = require_project()
-    tasks, registry, thresholds = preconditions(project, args)
+    tasks, registry, thresholds, backend = preconditions(project, args)
 
     task = next((t for t in tasks if t.id == args.ticket), None)
     if task is None:
@@ -196,7 +235,7 @@ def run_ticket(args: argparse.Namespace) -> int:
     if unmet:
         die(f"{task.id} depends on {', '.join(unmet)}, which are not done yet.")
 
-    _print_plan(project, [task], args)
+    _print_plan(project, [task], args, backend)
     if args.dry_run:
         info("")
         info("--dry-run: nothing was run.")
@@ -206,7 +245,7 @@ def run_ticket(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        outcome = _drive(project, task, args, registry, thresholds)
+        outcome = _drive(project, task, args, registry, thresholds, backend)
     except PipelineError as exc:
         sync_state(project)
         raise CommandError(f"{task.id}: {exc}") from exc
@@ -217,7 +256,7 @@ def run_ticket(args: argparse.Namespace) -> int:
 
 def run_all(args: argparse.Namespace) -> int:
     project = require_project()
-    tasks, registry, thresholds = preconditions(project, args)
+    tasks, registry, thresholds, backend = preconditions(project, args)
 
     state = fold(open_log(project))
     ready = pipeline.ready_tickets(state, tasks)
@@ -228,7 +267,7 @@ def run_all(args: argparse.Namespace) -> int:
         info("Run `harness status` to see the graph.")
         return 0
 
-    _print_plan(project, ready, args)
+    _print_plan(project, ready, args, backend)
     if args.dry_run:
         info("")
         info("--dry-run: nothing was run.")
@@ -240,7 +279,7 @@ def run_all(args: argparse.Namespace) -> int:
     outcomes: list[TicketOutcome] = []
     for task in ready:
         try:
-            outcomes.append(_drive(project, task, args, registry, thresholds))
+            outcomes.append(_drive(project, task, args, registry, thresholds, backend))
         except (PipelineError, CommandError) as exc:
             warn(f"{task.id}: {exc}")
             outcomes.append(TicketOutcome(task.id, "failed", detail=str(exc)))
@@ -257,11 +296,12 @@ def run_all(args: argparse.Namespace) -> int:
     return 0 if awaiting and len(awaiting) == len(outcomes) else 1
 
 
-def _print_plan(project: Project, tasks: list[TaskFile], args) -> None:
+def _print_plan(project: Project, tasks: list[TaskFile], args, backend: str) -> None:
     isolation = "host (isolation waived)" if args.no_container else "devcontainer per ticket"
     info("")
     info("Plan  (phase 3 execution)")
     info("")
+    info(f"  runner       {runners.describe(backend) if backend else 'none available'}")
     info(f"  isolation    {isolation}")
     info(f"  worktrees    {rel(worktrees.worktrees_root(project), project.root)}/<ticket>")
     info(f"  tickets      {len(tasks)}")

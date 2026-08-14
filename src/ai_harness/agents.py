@@ -22,9 +22,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import runner as runners
 from .context_index import ContextIndex
 from .execution import ExecutionError, Executor
-from .llm import LLM, LLMError
+from .llm import LLMError
 from .paths import Project
 from .registry import Registry
 
@@ -79,6 +80,7 @@ class AgentResult:
     model: str
     effort: str
     result: dict[str, Any]
+    backend: str = runners.API
     transcript: list[dict[str, Any]] = field(default_factory=list)
     violations: list[str] = field(default_factory=list)
 
@@ -525,12 +527,17 @@ def run(agent: str, *, project: Project, root: Path, executor: Executor,
         user_prompt: str, registry: Registry, model: str | None = None,
         index: ContextIndex | None = None, shell: str = "sh",
         max_turns: int = 60, max_tokens: int = 32000,
-        role: str | None = None, on_tool=None) -> AgentResult:
+        role: str | None = None, on_tool=None,
+        backend: str = runners.API) -> AgentResult:
     """Run one agent to completion against one worktree.
 
     ``role`` selects the contract and result schema when an agent has more than
     one mission; it defaults to the agent's own name. Write scope, model and
     report filename always follow the *agent*, never the role.
+
+    ``backend`` picks which runner makes the calls. Everything else here —
+    contract, tools, write scope, result schema — is identical either way, which
+    is the point: the backend changes who is billed, not what an agent may do.
     """
     role = role or agent
     system = load_contract(project, role)
@@ -538,10 +545,10 @@ def run(agent: str, *, project: Project, root: Path, executor: Executor,
     effort = registry.effort_for(agent)
 
     box = ToolBox(agent, root, executor, index=index, shell=shell)
-    llm = LLM(model=chosen, effort=effort, registry=registry)
+    runner = runners.build(backend, model=chosen, effort=effort, registry=registry)
 
     try:
-        result, transcript = llm.agentic(
+        result, transcript = runner.agentic(
             system=system, user=user_prompt, tools=tools_for(agent),
             dispatch=box.dispatch, schema=RESULT_SCHEMAS[role],
             max_turns=max_turns, max_tokens=max_tokens, on_tool=on_tool,
@@ -549,7 +556,8 @@ def run(agent: str, *, project: Project, root: Path, executor: Executor,
     except LLMError as exc:
         raise AgentError(f"{role} failed: {exc}") from exc
 
-    return AgentResult(agent=agent, model=chosen, effort=effort, result=result,
+    return AgentResult(agent=agent, model=chosen, effort=runner.effort,
+                       backend=runner.backend, result=result,
                        transcript=transcript, violations=list(box.violations))
 
 
@@ -559,7 +567,11 @@ def write_report(project: Project, ticket: str, agent: str, result: AgentResult)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / REPORT_FILES[agent]
     body = result.result.get("report_markdown") or result.result.get("summary") or ""
-    header = (f"<!-- {agent} | model {result.model} | effort {result.effort} "
+    # Effort is omitted rather than defaulted when the backend has no such
+    # control — a header claiming a setting that was never applied would make
+    # two runs look comparable when they are not.
+    effort = f" | effort {result.effort}" if result.effort else ""
+    header = (f"<!-- {agent} | {result.backend} | model {result.model}{effort} "
               f"| {len(result.transcript)} tool call(s) -->\n\n")
     path.write_text(header + body.rstrip() + "\n", encoding="utf-8")
     return path

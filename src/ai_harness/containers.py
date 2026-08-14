@@ -25,9 +25,11 @@ from pathlib import Path
 
 from .execution import CommandResult, ExecutionError, Executor
 
-IMAGE_TAG = "ai-harness/base:0.1"
+IMAGE_REPO = "ai-harness/base"
+IMAGE_TAG = f"{IMAGE_REPO}:0.1"
 CONTAINER_PREFIX = "ai-harness"
 WORKSPACE = "/workspace"
+REPORTS_MOUNT = "/harness/reports"
 
 NO_DOCKER = (
     "Docker is not available, and spec section 10 requires project-level work to "
@@ -54,6 +56,19 @@ def docker_available() -> tuple[bool, str]:
     return True, f"Docker server {probe.stdout.strip()}"
 
 
+def image_tag(dockerfile: Path) -> str:
+    """Tag the image by the content of the Dockerfile that produced it.
+
+    A fixed tag plus an existence check means an edited Dockerfile is never
+    rebuilt — the stale image satisfies the check forever, and the edit silently
+    does nothing. Hashing the content makes a changed Dockerfile a different
+    image by construction, so the rebuild is not something anyone has to
+    remember to force.
+    """
+    digest = hashlib.sha256(dockerfile.read_bytes()).hexdigest()[:12]
+    return f"{IMAGE_REPO}:{digest}"
+
+
 def container_name(project_root: Path, ticket: str) -> str:
     """Stable per (project, ticket), so a resumed run finds its own container.
 
@@ -64,11 +79,26 @@ def container_name(project_root: Path, ticket: str) -> str:
     return f"{CONTAINER_PREFIX}-{digest}-{ticket.lower()}"
 
 
+def _mount_source(path: Path) -> str:
+    """A host path in the form Docker's ``-v`` parser accepts.
+
+    Windows paths carry backslashes and a drive-letter colon, and the colon is
+    also ``-v``'s own field separator. Docker special-cases a single-letter
+    drive, but reliably only with forward slashes — so they are normalised here
+    rather than left to chance on the platform this harness is developed on.
+    """
+    return Path(path).resolve().as_posix()
+
+
 class DockerExecutor(Executor):
     """Runs commands inside one container bound to one worktree."""
 
     def __init__(self, root: Path, ticket: str, image: str = IMAGE_TAG,
-                 env: dict[str, str] | None = None, extra_mounts: dict[Path, str] | None = None):
+                 env: dict[str, str] | None = None,
+                 extra_mounts: dict[Path, tuple[str, str]] | None = None):
+        """``extra_mounts`` maps a host path to ``(mount_point, mode)``, where
+        mode is ``ro`` or ``rw``. Gate scripts read from a read-only mount but
+        write their evidence to a writable one, so the mode cannot be fixed."""
         super().__init__(root=root, env=env or {})
         self.ticket = ticket
         self.image = image
@@ -94,12 +124,18 @@ class DockerExecutor(Executor):
         return probe.returncode == 0 and probe.stdout.strip() == "true"
 
     def ensure_image(self, dockerfile: Path) -> None:
+        """Build the image for this Dockerfile if it is not already built.
+
+        Adopts the content-hashed tag, so editing the Dockerfile produces a
+        different image rather than silently reusing the old one.
+        """
+        self.image = image_tag(dockerfile)
         probe = self._docker(["image", "inspect", self.image])
         if probe.returncode == 0:
             return
         built = self._docker(
             ["build", "-t", self.image, "-f", str(dockerfile), str(dockerfile.parent)],
-            timeout=1800)
+            timeout=3600)
         if built.returncode != 0:
             raise ExecutionError(
                 f"could not build the harness base image:\n{built.stderr.strip()}")
@@ -118,10 +154,10 @@ class DockerExecutor(Executor):
             return
 
         argv = ["run", "-d", "--name", self.name,
-                "-v", f"{self.root}:{WORKSPACE}",
+                "-v", f"{_mount_source(self.root)}:{WORKSPACE}",
                 "-w", WORKSPACE]
-        for host_path, mount_point in self.extra_mounts.items():
-            argv += ["-v", f"{host_path}:{mount_point}:ro"]
+        for host_path, (mount_point, mode) in self.extra_mounts.items():
+            argv += ["-v", f"{_mount_source(host_path)}:{mount_point}:{mode}"]
         for key, value in self.env.items():
             argv += ["-e", f"{key}={value}"]
         # No published ports and no host network: a ticket's container talks to

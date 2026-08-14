@@ -23,6 +23,7 @@ from ..state import fold
 from ..taskfile import TaskFileError
 from ..trackers import TrackerError
 from ..trackers.github import parse_repo_arg
+from ..worktrees import GitError
 from ._common import (CommandError, confirm, die, info, open_log, rel,
                       require_project, sync_state, warn)
 
@@ -137,23 +138,56 @@ def run(args: argparse.Namespace) -> int:
 
 
 def _post_approval(project: Project, ticket: str, args) -> None:
-    """Documentation and DevOps run only after the human gate, then the PR."""
-    info("")
-    info("Documentation and DevOps run after approval; they need the ticket's "
-         "worktree, which `harness run` removes unless --keep-worktree was used.")
-
-    existing = {w.ticket: w for w in worktrees.existing(project)}
-    worktree = existing.get(ticket)
-    if worktree is None:
-        info(f"No worktree for {ticket} — skipping the post-approval agents. "
-             f"Re-run with `harness run-ticket {ticket} --keep-worktree` to include them.")
-        return
-
+    """The pull request, on a worktree that is here or can be brought back."""
     if args.no_pr:
+        info("")
         info("--no-pr: leaving the branch unpushed.")
         return
 
-    _offer_pull_request(project, ticket, worktree)
+    worktree, borrowed = _reach_worktree(project, ticket)
+    if worktree is None:
+        return
+    try:
+        _offer_pull_request(project, ticket, worktree)
+    finally:
+        if borrowed:
+            _release_worktree(project, ticket)
+
+
+def _reach_worktree(project: Project, ticket: str) -> tuple[object | None, bool]:
+    """Get at the ticket's tree, re-creating it from its branch if need be.
+
+    ``harness run`` removes a ticket's worktree unless ``--keep-worktree`` was
+    passed, so by the time a human approves, the tree this step needs is usually
+    gone. The work itself is not — it is committed on the ticket's branch — so
+    the gate reconstructs the tree rather than making the user have anticipated
+    this two commands ago. Returns whether it borrowed one, so it can put the
+    repository back the way it found it.
+    """
+    existing = {w.ticket: w for w in worktrees.existing(project)}
+    if ticket in existing:
+        return existing[ticket], False
+
+    branch = worktrees.branch_for(ticket)
+    if not worktrees.branch_exists(project.root, branch):
+        info(f"No worktree and no {branch} branch for {ticket}, so there is "
+             "nothing to push. The approval itself is recorded.")
+        return None, False
+
+    info(f"Re-creating the worktree for {ticket} from {branch} …")
+    try:
+        return worktrees.ensure(project, ticket), True
+    except GitError as exc:
+        warn(f"could not re-create the worktree for {ticket}: {exc}")
+        return None, False
+
+
+def _release_worktree(project: Project, ticket: str) -> None:
+    """Put back what ``_reach_worktree`` borrowed, unless it now holds work."""
+    try:
+        worktrees.remove(project, ticket)
+    except GitError:
+        info(f"Worktree for {ticket} kept — it has uncommitted changes.")
 
 
 def _offer_pull_request(project: Project, ticket: str, worktree) -> None:

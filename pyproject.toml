@@ -15,6 +15,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pyflakes>=3.2"]
+# The subscription-friendly backend. Optional so an API-key install stays as
+# small as it was, and because the SDK is a library around the Claude Code CLI —
+# installing it without that CLI present buys nothing.
+claude-code = ["claude-agent-sdk>=0.2"]
 # Spec section 9's symbol/dependency index. Optional so phases 1-2 install
 # without it; phase 3 reports the degradation loudly rather than pretending.
 context = ["tree-sitter>=0.23", "tree-sitter-language-pack>=0.9"]

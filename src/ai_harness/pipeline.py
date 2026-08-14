@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from . import agents, gates, worktrees
+from . import agents, gates, runner as runners, worktrees
 from .agents import AgentError, AgentResult
 from .context_index import ContextIndex, ContextIndexUnavailable
 from .events import EventLog
@@ -77,8 +77,11 @@ class TicketPipeline:
     def __init__(self, project: Project, task: TaskFile, *, log: EventLog,
                  executor: Executor, worktree: worktrees.Worktree,
                  registry: Registry, thresholds: Thresholds,
-                 gates_dir: str, shell: str = "sh",
+                 gates_dir: str, report_dir: str, shell: str = "sh",
+                 backend: str = runners.API,
                  announce: Callable[[str], None] = lambda _m: None):
+        self.backend = backend
+        self.report_dir = report_dir
         self.project = project
         self.task = task
         self.ticket = task.id
@@ -111,6 +114,7 @@ class TicketPipeline:
                 agent, project=self.project, root=self.worktree.path,
                 executor=self.executor, user_prompt=prompt, registry=self.registry,
                 model=self.models.get(agent), index=self.index, shell=self.shell,
+                backend=self.backend,
             )
         except AgentError as exc:
             raise PipelineError(str(exc)) from exc
@@ -118,6 +122,7 @@ class TicketPipeline:
         self.reports[agent] = agents.write_report(self.project, self.ticket, agent, result)
         self._emit("task.agent_completed", {
             "task_id": self.ticket, "agent": agent, "model": result.model,
+            "runner": result.backend,
             "result": "blocked" if result.blocked else "complete",
             "summary": result.result.get("summary", ""),
             "tool_calls": len(result.transcript),
@@ -148,8 +153,8 @@ class TicketPipeline:
     def run_gates(self) -> tuple[bool, list[GateResult], list[str]]:
         self.announce(f"  {self.ticket}  gates ...")
         results = gates.run_all(self.executor, ticket=self.ticket,
-                                gates_dir=self.gates_dir, project=self.project,
-                                shell=self.shell)
+                                gates_dir=self.gates_dir, report_dir=self.report_dir,
+                                project=self.project, shell=self.shell)
         gates.write_results(self.project, self.ticket, results)
         passed, reasons = gates.verdict(results, self.thresholds)
         self._emit("ticket.gates_ran", {
@@ -175,6 +180,7 @@ class TicketPipeline:
         assigned = {a: self.models.get(a, self.registry.default_for(a))
                     for a in agents.AGENTS if a != "architect"}
         self._emit("task.models_assigned", {"task_id": self.ticket,
+                                            "runner": self.backend,
                                             "assigned_models": assigned})
 
         plan = architect.result.get("plan_markdown", "")

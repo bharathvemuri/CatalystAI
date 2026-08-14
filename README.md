@@ -30,13 +30,42 @@ pip install -e .
 That exposes a `harness` command. If your Python `Scripts/` directory is not on
 `PATH`, `python -m ai_harness` is equivalent.
 
-The harness makes its own API calls, so it needs its own credential:
+The harness makes its own model calls, so it needs its own way to reach a model.
+There are two, and you only need one.
+
+**An Anthropic API key.** Billed per token, and the higher-fidelity path: the
+model itself is constrained to each agent's result schema, and the per-agent
+`effort` settings in the model registry apply.
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 `ant auth login` works too — the SDK resolves either.
+
+**A Claude Pro/Max subscription.** No API key. The harness drives the Claude
+Code CLI you are already logged into, through the Claude Agent SDK:
+
+```bash
+pip install -e ".[claude-code]"
+```
+
+You need the Claude Code CLI installed and logged in (run `claude` once). Two
+things are genuinely worse on this path, and the harness says so rather than
+hiding it: `effort` has no equivalent knob and is left out of report headers
+instead of being claimed, and the result schema is enforced by the harness after
+the fact rather than by the model during generation — a malformed result costs
+the agent a turn to correct.
+
+Everything else is identical. Both backends run the same agent contracts, the
+same tools under the same write-scope enforcement, the same container isolation,
+and the same gates.
+
+The backend is auto-detected, preferring the API key when both are set up. Every
+command that calls a model takes `--runner {api,claude-code}` to choose
+explicitly, and honours `AI_HARNESS_RUNNER`. The choice is printed in the plan
+and recorded in the event log, because a run's evidence should say what produced
+it.
 
 ## Phase 1 walkthrough
 
@@ -238,7 +267,9 @@ src/ai_harness/
 ├── events.py         append-only log — the source of truth
 ├── state.py          derived state (a fold over the log)
 ├── contracts.py      JSON Schema validation
-├── llm.py            the only module that knows about a model provider
+├── runner.py         the two model backends, and choosing between them
+├── llm.py            the `api` backend: Anthropic API, schema-constrained
+├── claude_code.py    the `claude-code` backend: Agent SDK, your own login
 ├── loaders.py        pluggable document loaders (.md/.txt in v1)
 ├── qa_round.py       the open-questions file format
 ├── registry.py       the closed set of models an agent may use

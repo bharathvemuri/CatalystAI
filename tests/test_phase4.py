@@ -12,9 +12,8 @@ import subprocess
 
 import pytest
 
-from ai_harness import agents, cli, contracts, worktrees
+from ai_harness import agents, cli, contracts, runner, worktrees
 from ai_harness.agents import AgentResult
-from ai_harness.commands import run as run_cmd
 from ai_harness.commands import write_documentation as wd
 from ai_harness.commands._common import CommandError
 from ai_harness.events import EventLog
@@ -89,10 +88,12 @@ def fake_result(**overrides) -> AgentResult:
 
 def install_fakes(monkeypatch, agent_result=None, *, writes=wd.REQUIRED_DOCS):
     """Replace the model call and the container with deterministic stand-ins."""
-    monkeypatch.setattr(run_cmd, "credentials_available", lambda: True)
+    # The credential check now resolves a backend rather than asking one
+    # provider whether it has a key, so the seam to pin is the selection.
+    monkeypatch.setattr(runner, "select", lambda preference=None: runner.API)
 
     def fake_executor(project, name, root, args, log):
-        return RecordingExecutor(root), "/gates", "sh"
+        return RecordingExecutor(root), "/gates", "/reports", "sh"
 
     monkeypatch.setattr(wd, "make_executor", fake_executor)
 
@@ -327,7 +328,9 @@ def test_a_blocked_agent_stops_without_advancing_the_phase(docs_project, monkeyp
 
 def test_isolation_waiver_is_recorded(docs_project, monkeypatch):
     """--no-container is a real reduction in evidence quality, so it is logged."""
-    monkeypatch.setattr(run_cmd, "credentials_available", lambda: True)
+    # The credential check now resolves a backend rather than asking one
+    # provider whether it has a key, so the seam to pin is the selection.
+    monkeypatch.setattr(runner, "select", lambda preference=None: runner.API)
     monkeypatch.setattr(agents, "run", lambda agent, *, root, **kw: (
         [(root / n).write_text("# x\n", encoding="utf-8") for n in wd.REQUIRED_DOCS],
         fake_result())[1])
