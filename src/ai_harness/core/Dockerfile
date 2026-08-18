@@ -14,7 +14,8 @@ FROM ubuntu:latest
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
-    PIP_BREAK_SYSTEM_PACKAGES=1
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git build-essential \
@@ -24,6 +25,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN ln -sf /usr/bin/python3 /usr/local/bin/python
+
+# pnpm and yarn as shims rather than as pinned installs. Corepack reads the
+# repository's own `packageManager` field and fetches exactly that version, which
+# is the same rule the bootstrap step follows: install what the project declares.
+# A globally installed pnpm would instead pin one version for every project, and
+# a version that did not write the lockfile fails `--frozen-lockfile` with an
+# error about the lockfile rather than about the version.
+#
+# The download prompt is disabled above because it would block forever in a
+# container nobody is watching.
+RUN corepack enable
 
 # GitHub CLI, from GitHub's own apt repository.
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \

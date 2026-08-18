@@ -143,9 +143,17 @@ def make_executor(project: Project, ticket: str, root: Path, args,
         gates_source: (gates.GATES_MOUNT, "ro"),
         reports_source: (containers.REPORTS_MOUNT, "rw"),
     })
-    executor.ensure_image(project.resolve("Dockerfile"))
-    executor.start()
-    _bootstrap(executor, ticket, root)
+    # This runs before the caller can wrap the executor in its own try/finally,
+    # so a failure here — bootstrap is the usual one — has to clean up its own
+    # container. A leaked container outlives the run and, being named per
+    # (project, ticket), is what the next run reattaches to.
+    try:
+        executor.ensure_image(project.resolve("Dockerfile"))
+        executor.start()
+        _bootstrap(executor, ticket, root)
+    except BaseException:
+        executor.dispose()
+        raise
     return executor, gates.GATES_MOUNT, containers.REPORTS_MOUNT, "sh"
 
 

@@ -123,6 +123,11 @@ class DockerExecutor(Executor):
         probe = self._docker(["container", "inspect", self.name, "--format", "{{.State.Running}}"])
         return probe.returncode == 0 and probe.stdout.strip() == "true"
 
+    def _container_image(self) -> str:
+        """The image tag an existing container was created from, or ""."""
+        probe = self._docker(["container", "inspect", self.name, "--format", "{{.Config.Image}}"])
+        return probe.stdout.strip() if probe.returncode == 0 else ""
+
     def ensure_image(self, dockerfile: Path) -> None:
         """Build the image for this Dockerfile if it is not already built.
 
@@ -143,15 +148,23 @@ class DockerExecutor(Executor):
     def start(self) -> None:
         if self._started and self._running():
             return
-        if self._running():
-            self._started = True
-            return
         if self._exists():
-            started = self._docker(["start", self.name])
-            if started.returncode != 0:
-                raise ExecutionError(f"could not start {self.name}: {started.stderr.strip()}")
-            self._started = True
-            return
+            # A container from a previous run is reused so a resumed ticket keeps
+            # its bootstrapped environment. But only when it was built from the
+            # image this run wants: a changed Dockerfile is a different image by
+            # content hash, and a container from the old one lacks whatever the
+            # change added. Reusing it would run the ticket against a stale
+            # environment while reporting success — which is exactly how a `pnpm`
+            # added to the image stays invisible to a container that predates it.
+            if self._container_image() == self.image:
+                if not self._running():
+                    started = self._docker(["start", self.name])
+                    if started.returncode != 0:
+                        raise ExecutionError(
+                            f"could not start {self.name}: {started.stderr.strip()}")
+                self._started = True
+                return
+            self.dispose()
 
         argv = ["run", "-d", "--name", self.name,
                 "-v", f"{_mount_source(self.root)}:{WORKSPACE}",
@@ -212,7 +225,16 @@ def bootstrap_commands(root: Path) -> list[list[str]]:
     that declares nothing gets nothing installed rather than a plausible guess.
     """
     commands: list[list[str]] = []
-    if (root / "package-lock.json").is_file():
+    # Node's lockfiles are checked before its manifest, and in declaration
+    # order rather than alphabetically: a pnpm or yarn workspace has a
+    # package.json too, so falling through to npm on the manifest alone is not
+    # a neutral default. npm cannot resolve the `workspace:*` protocol, and the
+    # error it raises names none of this.
+    if (root / "pnpm-lock.yaml").is_file():
+        commands.append(["pnpm", "install", "--frozen-lockfile"])
+    elif (root / "yarn.lock").is_file():
+        commands.append(["yarn", "install", "--immutable"])
+    elif (root / "package-lock.json").is_file():
         commands.append(["npm", "ci"])
     elif (root / "package.json").is_file():
         commands.append(["npm", "install"])

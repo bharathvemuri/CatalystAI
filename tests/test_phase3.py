@@ -12,7 +12,7 @@ import subprocess
 
 import pytest
 
-from ai_harness import agents, gates, pipeline, worktrees
+from ai_harness import agents, containers, gates, pipeline, worktrees
 from ai_harness.agents import AgentError, AgentResult, ToolBox
 from ai_harness.commands import approve
 from ai_harness.commands._common import CommandError
@@ -301,6 +301,122 @@ def test_build_gate_fails_on_broken_source(project, tmp_path):
                             report_dir=(tmp_path / "reports").as_posix(),
                             project=project, shell=posix_shell())
     assert result.status == "fail"
+
+
+# --------------------------------------------------------------- bootstrap
+
+def test_a_pnpm_workspace_is_not_bootstrapped_with_npm(tmp_path):
+    """The failure this prevents names neither pnpm nor workspaces."""
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
+    (tmp_path / "pnpm-workspace.yaml").write_text("packages:\n  - 'apps/*'\n", encoding="utf-8")
+
+    assert containers.bootstrap_commands(tmp_path) == [
+        ["pnpm", "install", "--frozen-lockfile"]]
+
+
+def test_yarn_is_detected_before_the_manifest(tmp_path):
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "yarn.lock").write_text("", encoding="utf-8")
+
+    assert containers.bootstrap_commands(tmp_path) == [["yarn", "install", "--immutable"]]
+
+
+def test_npm_is_still_used_when_npm_is_what_is_declared(tmp_path):
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+    assert containers.bootstrap_commands(tmp_path) == [["npm", "install"]]
+
+    (tmp_path / "package-lock.json").write_text("{}", encoding="utf-8")
+    assert containers.bootstrap_commands(tmp_path) == [["npm", "ci"]]
+
+
+def test_a_repository_declaring_nothing_installs_nothing(tmp_path):
+    assert containers.bootstrap_commands(tmp_path) == []
+
+
+# ---------------------------------------------------- container reuse / leaks
+
+class _FakeDocker:
+    """Records docker argv and answers inspects for one simulated container."""
+
+    def __init__(self, *, exists: bool, running: bool = False, image: str = ""):
+        self.calls: list[list[str]] = []
+        self.exists = exists
+        self.running = running
+        self.image = image
+
+    def __call__(self, argv, timeout=300):
+        self.calls.append(argv)
+        fmt = argv[-1] if argv[:2] == ["container", "inspect"] else None
+        if fmt == "{{.State.Running}}":
+            if not self.exists:
+                return subprocess.CompletedProcess(argv, 1, "", "No such container")
+            return subprocess.CompletedProcess(argv, 0, "true" if self.running else "false", "")
+        if fmt == "{{.Config.Image}}":
+            if not self.exists:
+                return subprocess.CompletedProcess(argv, 1, "", "No such container")
+            return subprocess.CompletedProcess(argv, 0, self.image, "")
+        if argv[0] == "run":              # creating fresh started the container
+            self.exists = self.running = True
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    def verbs(self) -> list[str]:
+        return [c[0] for c in self.calls]
+
+
+def _docker_executor(monkeypatch, fake, tmp_path, image):
+    from ai_harness.containers import DockerExecutor
+    monkeypatch.setattr(DockerExecutor, "_docker",
+                        lambda self, argv, timeout=300: fake(argv, timeout))
+    return DockerExecutor(root=tmp_path, ticket="T-001", image=image)
+
+
+def test_a_container_from_a_stale_image_is_rebuilt(monkeypatch, tmp_path):
+    """A changed Dockerfile must not be shadowed by a container from the old one."""
+    fake = _FakeDocker(exists=True, running=False, image="ai-harness/base:OLD")
+    ex = _docker_executor(monkeypatch, fake, tmp_path, image="ai-harness/base:NEW")
+
+    ex.start()
+
+    assert ["rm", "-f", ex.name] in fake.calls    # the stale one is removed
+    assert "run" in fake.verbs()                  # and a fresh one created
+    assert "start" not in fake.verbs()            # never reused
+
+
+def test_a_container_from_the_current_image_is_reused(monkeypatch, tmp_path):
+    fake = _FakeDocker(exists=True, running=False, image="ai-harness/base:NEW")
+    ex = _docker_executor(monkeypatch, fake, tmp_path, image="ai-harness/base:NEW")
+
+    ex.start()
+
+    assert "start" in fake.verbs()                # reattached, bootstrap preserved
+    assert "run" not in fake.verbs()              # not recreated
+    assert ["rm", "-f", ex.name] not in fake.calls
+
+
+def test_make_executor_disposes_the_container_when_bootstrap_fails(monkeypatch, project):
+    """A bootstrap failure must not leak the container the next run reattaches to."""
+    import argparse
+    from ai_harness.commands import run as run_cmd
+
+    disposed = []
+
+    class _Executor:
+        name = "ai-harness-test-t-001"
+        def ensure_image(self, dockerfile): pass
+        def start(self): pass
+        def dispose(self): disposed.append(True)
+
+    monkeypatch.setattr(run_cmd, "DockerExecutor", lambda **kw: _Executor())
+    monkeypatch.setattr(run_cmd, "docker_available", lambda: (True, "ok"))
+    monkeypatch.setattr(run_cmd, "_bootstrap",
+                        lambda *a, **k: run_cmd.die("bootstrap blew up"))
+
+    args = argparse.Namespace(no_container=False)
+
+    with pytest.raises(CommandError):
+        run_cmd.make_executor(project, "T-001", project.root, args, log=None)
+    assert disposed == [True]
 
 
 # ---------------------------------------------------------------- worktrees
