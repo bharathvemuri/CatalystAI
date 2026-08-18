@@ -62,6 +62,17 @@ as a contract violation.
 | Documentation | yes | docs only | optional | no |
 | DevOps | yes | infrastructure | yes | no |
 
+## Your report is a result field, not a file you write
+
+Your contract names a report under `.harness/reports/<id>/`. That path is where
+the **harness** writes it. You deliver the report as the `report_markdown` field
+of your structured result; the harness persists it there for you. Never call a
+write tool to create or edit that file — a report path is outside every agent's
+write boundary, so the attempt is rejected and recorded as a contract violation
+even though the report itself still gets written from `report_markdown`. The
+files your boundary permits (tests, benchmarks, code, docs) are a separate thing
+from your report.
+
 ## Context discipline
 
 Query the context index for structure — what calls this, what imports that,

@@ -50,7 +50,8 @@ Specifically hunt for:
 
 ## Required Output
 
-`.harness/reports/<id>/performance-report.md`.
+Your `report_markdown` result field — the harness writes it to
+`.harness/reports/<id>/performance-report.md`; do not write that file yourself.
 
 Evidence is mandatory and its form is specified. Not acceptable:
 

@@ -59,7 +59,9 @@ test for something a unit test proves is slower, flakier, and worse evidence.
 
 ## Required Output
 
-`.harness/reports/<id>/qa-report.md` containing:
+Your `report_markdown` result field — the harness writes it to
+`.harness/reports/<id>/qa-report.md`; do not write that file yourself. It must
+contain:
 
 - Real execution counts, not estimates:
   `Tests executed: 184 / Passed: 184 / Failed: 0`
