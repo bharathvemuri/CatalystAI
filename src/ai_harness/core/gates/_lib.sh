@@ -18,11 +18,29 @@ mkdir -p "$HARNESS_REPORT_DIR/evidence"
 EVIDENCE_FILE="$HARNESS_REPORT_DIR/evidence/$HARNESS_GATE.log"
 : > "$EVIDENCE_FILE"
 
-# JSON string escaping in POSIX sh: backslash, quote, then control characters.
+# JSON string escaping in POSIX sh. Backslash and quote first, then every
+# control character (U+0000-U+001F) as \uXXXX — including the ESC bytes in the
+# ANSI colour codes a build tool writes. This matters: Python's json.loads
+# rejects a raw control character inside a string, so a single stray ESC in the
+# evidence tail made the whole gate result unparseable and a *passing* gate
+# (vite/vitest emit colour) read as "the gate produced no parseable result".
+# LC_ALL=C makes awk walk bytes, so multibyte UTF-8 passes through unescaped.
 json_escape() {
-    sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' \
-        -e 's/\r/\\r/g' -e 's/\t/\\t/g' \
-        | awk 'BEGIN { ORS="" } { if (NR > 1) print "\\n"; print }'
+    LC_ALL=C awk '
+        BEGIN { ORS = ""; bs = sprintf("%c", 92)
+                for (i = 0; i < 256; i++) ord[sprintf("%c", i)] = i }
+        NR > 1 { printf "%sn", bs }
+        {
+            n = length($0)
+            for (j = 1; j <= n; j++) {
+                c = substr($0, j, 1)
+                if (c == "\\") { printf "%s%s", bs, bs; continue }
+                if (c == "\"") { printf "%s%c", bs, 34; continue }
+                k = ord[c]
+                if (k < 32) printf "%su%04x", bs, k
+                else printf "%s", c
+            }
+        }'
 }
 
 # detect_stack -> node | python | go | rust | java | unknown
