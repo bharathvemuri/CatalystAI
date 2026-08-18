@@ -183,6 +183,29 @@ def diff(worktree: Worktree, base: str, max_chars: int = 200_000) -> str:
     return combined
 
 
+def history(root: Path, *, max_commits: int = 40, max_chars: int = 20_000) -> str:
+    """Recent history, rendered for an agent that cannot run git itself.
+
+    Git is host-only by design (see the module docstring), but the Architect's
+    contract needs to know how an area has changed before. Reading it out here
+    and passing it as context satisfies that without mounting the repository's
+    ``.git`` into a ticket's container, which would hand a container the ability
+    to rewrite the history the isolation exists to protect.
+
+    Scoped to the branch rather than to the ticket's paths on purpose: a task's
+    ``dir`` is a tracker label, not a guaranteed directory, and inferring one
+    from the other would be the kind of guess this harness refuses elsewhere.
+    """
+    out = git(root, "log", f"-n{max_commits}", "--no-merges", "--date=short",
+              "--pretty=format:%h %ad %an: %s", check=False).strip()
+    if not out:
+        return ("This repository has no commit history yet — this is the first "
+                "work on it. Do not infer prior conventions from its absence.")
+    if len(out) > max_chars:
+        out = out[:max_chars] + f"\n[history truncated at {max_chars} characters]"
+    return out
+
+
 def commit_all(worktree: Worktree, message: str) -> str | None:
     """Commit everything in the worktree. Returns the sha, or None if clean."""
     if not is_dirty(worktree):

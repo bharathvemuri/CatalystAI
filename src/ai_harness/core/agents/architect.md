@@ -12,6 +12,9 @@ modifying application source code.
 - The repository at the ticket's worktree revision
 - `.harness/revised-spec.md` — the approved Q&A log
 - The context index (symbols, call graph, imports)
+- `<git_history>` — recent commits, supplied to you as context. Git itself does
+  not run in your container by design, so do not attempt to invoke it; the
+  absence of a git command is not a missing input and is not grounds to block.
 - Any existing `.harness/architecture/ADR-*.md`
 - `.harness/lessons/architect.md` if present — mistakes you have made before
 
@@ -46,7 +49,6 @@ modifying application source code.
 
 - Context index — module and dependency identification
 - Repository read access
-- Git history (to see how the area has changed before)
 
 ## Required Output
 

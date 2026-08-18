@@ -374,6 +374,35 @@ def test_a_non_repository_is_a_clean_failure(project):
         worktrees.ensure(project, "T-001")
 
 
+def test_history_is_rendered_for_agents_that_cannot_run_git(git_project):
+    worktree = worktrees.ensure(git_project, "T-001")
+    (worktree.path / "new.py").write_text("x = 1\n", encoding="utf-8")
+    worktrees.commit_all(worktree, "T-001: a distinctive subject line")
+
+    rendered = worktrees.history(worktree.path)
+    assert "a distinctive subject line" in rendered
+
+
+def test_history_says_so_rather_than_returning_nothing(tmp_path):
+    """An empty repository must not read as 'no conventions to follow'."""
+    root = tmp_path / "fresh"
+    root.mkdir()
+    worktrees.git(root, "init", "-b", "main")
+
+    rendered = worktrees.history(root)
+    assert "no commit history yet" in rendered
+
+
+def test_history_is_bounded(git_project):
+    worktree = worktrees.ensure(git_project, "T-001")
+    for n in range(12):
+        (worktree.path / f"f{n}.py").write_text(f"x = {n}\n", encoding="utf-8")
+        worktrees.commit_all(worktree, f"T-001: commit number {n}")
+
+    assert len(worktrees.history(worktree.path, max_chars=200)) < 300
+    assert len(worktrees.history(worktree.path, max_commits=3).splitlines()) == 3
+
+
 # ---------------------------------------------------------------- pipeline
 
 def _task_entry(status, depends_on=()):
@@ -416,6 +445,37 @@ def _agent_result(agent, **fields):
     return AgentResult(agent=agent, model="claude-sonnet-5", effort="high",
                        result={"status": "complete", "blocking_reason": "",
                                "summary": "", "report_markdown": "", **fields})
+
+
+def test_the_architect_is_handed_git_history_it_cannot_read_itself(project, monkeypatch):
+    """Git is host-only, so the Architect's history has to arrive as context."""
+    engine = _pipeline(project)
+    monkeypatch.setattr(worktrees, "history", lambda *a, **k: "deadbee 2026-01-01 x: first")
+
+    seen = {}
+
+    def capture(agent, extra):
+        seen[agent] = extra
+        raise pipeline.PipelineError("stop after the architect")
+
+    monkeypatch.setattr(engine, "_run_agent", capture)
+    monkeypatch.setattr(engine, "build_index", lambda: None)
+
+    with pytest.raises(pipeline.PipelineError):
+        engine.run()
+
+    assert seen["architect"]["git_history"] == "deadbee 2026-01-01 x: first"
+
+
+def test_the_rendered_history_reaches_the_prompt(project):
+    from ai_harness import taskfile
+    write_task(project, "T-001", "backend")
+    task = taskfile.load(project.tasks / "backend" / "T-001.md", project)
+    worktree = worktrees.Worktree("T-001", project.root, "harness/T-001")
+
+    prompt = pipeline._prompt_for("architect", task, worktree,
+                                  {"git_history": "deadbee 2026-01-01 x: first"})
+    assert "<git_history>" in prompt and "deadbee" in prompt
 
 
 def test_a_failing_gate_blocks_approval(project):

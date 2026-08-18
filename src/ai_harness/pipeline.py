@@ -172,7 +172,9 @@ class TicketPipeline:
         self._status("in_progress")
         self.build_index()
 
-        architect = self._run_agent("architect", {})
+        architect = self._run_agent("architect", {
+            "git_history": worktrees.history(self.worktree.path),
+        })
         overrides = architect.result.get("model_overrides") or {}
         for agent, model in overrides.items():
             if agent in agents.AGENTS:
