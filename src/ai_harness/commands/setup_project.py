@@ -519,7 +519,7 @@ def _apply(args, project: Project, log, state, tracker, repo: RepoRef,
     if failures:
         return 1
     info("")
-    info("Next: harness status   (phase 3 execution is not implemented yet)")
+    info("Next: harness run --dry-run   (see the phase 3 execution plan before anything runs)")
     return 0
 
 
