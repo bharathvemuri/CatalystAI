@@ -17,7 +17,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .. import containers, gates, pipeline, runner as runners, taskfile, worktrees
+from .. import containers, env, gates, pipeline, runner as runners, taskfile, worktrees
 from ..containers import NO_DOCKER, DockerExecutor, docker_available
 from ..context_index import NO_TREE_SITTER, available as index_available
 from ..execution import Executor, HostExecutor, posix_shell
@@ -87,6 +87,13 @@ def preconditions(project: Project, args
     if not worktrees.is_repo(project.root):
         die(f"{project.root} is not a git repository.\n"
             "Phase 3 runs each ticket in its own git worktree.")
+
+    # Credentials the SDK and the API runner's pre-flight check read from the
+    # environment are documented to live in `.env` too (see `.env.example`), so
+    # load those tiers before selecting a backend — otherwise a key sitting in
+    # the repo's `.env` is invisible and the run falls back to the CLI login.
+    for name, source in env.load_into_environ(project).items():
+        info(f"  credential   {name} from {rel(Path(source), project.root)}")
 
     # A dry run still resolves the backend, because "which model calls would
     # this make, billed to what" is exactly what a plan is for. It just does

@@ -71,3 +71,35 @@ def lookup(name: str, project: Project | None = None) -> tuple[str, str] | None:
 def describe_sources(project: Project | None = None) -> str:
     """Where a missing credential could have been put, in precedence order."""
     return " > ".join(["the environment", *(str(p) for p in files(project))])
+
+
+# Credentials the Anthropic SDK and the API runner's pre-flight check read
+# straight from ``os.environ`` rather than through ``lookup`` — the SDK client
+# resolves them itself, and ``credentials_available`` cannot take a project.
+# ``.env.example`` documents the ``.env`` tiers as their home, so they are copied
+# into the environment once, at command startup, before a backend is selected.
+ENVIRON_CREDENTIALS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+
+
+def load_into_environ(project: Project | None = None,
+                      names: tuple[str, ...] = ENVIRON_CREDENTIALS) -> dict[str, str]:
+    """Copy credential variables from the ``.env`` tiers into ``os.environ``.
+
+    A variable already set in the real environment is left untouched, which
+    keeps the precedence ``lookup`` gives — process environment over ``.env``.
+    Returns ``{name: source_path}`` for those loaded from a file, so a caller can
+    name the source without ever handling the value.
+    """
+    loaded: dict[str, str] = {}
+    for name in names:
+        if os.environ.get(name):
+            continue
+        for path in files(project):
+            if not path.is_file():
+                continue
+            value = parse(path.read_text(encoding="utf-8")).get(name)
+            if value:
+                os.environ[name] = value
+                loaded[name] = str(path)
+                break
+    return loaded

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 
 import pytest
 
@@ -217,6 +218,30 @@ def test_missing_credential_is_none_not_an_exception(project, tmp_path, monkeypa
     monkeypatch.setenv("AI_HARNESS_HOME", str(tmp_path / "empty"))
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     assert env.lookup("GITHUB_TOKEN", project) is None
+
+
+def test_env_credentials_are_loaded_into_the_environment(project, monkeypatch):
+    # The Anthropic SDK reads the key from os.environ, so a key that only lives
+    # in the repo's .env has to be copied there or the API runner never sees it.
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    (project.root / ".env").write_text(
+        "ANTHROPIC_API_KEY=sk-ant-from-dotenv\n", encoding="utf-8")
+
+    loaded = env.load_into_environ(project)
+
+    assert loaded == {"ANTHROPIC_API_KEY": str(project.root / ".env")}
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-from-dotenv"
+
+
+def test_a_real_env_var_is_not_overwritten_by_dotenv(project, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-real-env")
+    (project.root / ".env").write_text(
+        "ANTHROPIC_API_KEY=sk-ant-from-dotenv\n", encoding="utf-8")
+
+    loaded = env.load_into_environ(project)
+
+    assert loaded == {}  # nothing loaded from a file
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-real-env"
 
 
 # ------------------------------------------------------------ repo resolution
