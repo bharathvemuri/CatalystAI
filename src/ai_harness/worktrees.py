@@ -23,6 +23,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -104,16 +105,35 @@ def existing(project: Project) -> list[Worktree]:
 
 
 def _remove_tree(path: Path) -> None:
-    """Delete a directory tree, clearing the read-only bit git objects and
-    ``node_modules`` carry on Windows so the removal does not stall halfway."""
+    """Delete a directory tree, tolerating what a worktree accumulates.
+
+    On Windows a pnpm/yarn ``node_modules`` is full of symlinks and directory
+    junctions to workspace packages; ``shutil.rmtree`` walks into them and trips
+    on the reparse points (WinError 1920). The shell ``rmdir /s /q`` removes a
+    junction as a link without recursing into its target, so it clears these
+    trees where ``rmtree`` stalls. Elsewhere ``rmtree`` with the read-only bit
+    cleared is enough.
+    """
+    if sys.platform == "win32":
+        subprocess.run(["cmd", "/c", "rmdir", "/s", "/q", str(path)],
+                       capture_output=True, text=True, check=False)
+        if not path.exists():
+            return  # cleared
+
     def clear_readonly(func, target, _exc):  # noqa: ANN001 - shutil callback
-        os.chmod(target, stat.S_IWRITE)
-        func(target)
+        try:
+            os.chmod(target, stat.S_IWRITE)
+            func(target)
+        except OSError:
+            pass  # skip a stubborn entry rather than abort the whole removal
 
     try:
         shutil.rmtree(path, onexc=clear_readonly)     # Python 3.12+
     except TypeError:
         shutil.rmtree(path, onerror=clear_readonly)   # Python < 3.12
+
+    if path.exists():
+        raise GitError(f"could not clear the stale worktree directory at {path}")
 
 
 def ensure(project: Project, ticket: str, base: str | None = None) -> Worktree:
