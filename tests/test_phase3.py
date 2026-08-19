@@ -456,6 +456,34 @@ def test_ensure_reattaches_instead_of_restarting(git_project):
     assert (again.path / "work.py").is_file()  # work was not discarded
 
 
+def test_ensure_self_heals_a_dotfile_stripped_worktree(git_project):
+    # An external, dotfile-blind copy tool can strip every dot-entry from a
+    # worktree — including its `.git` link — leaving a plain directory git no
+    # longer tracks. ensure() must clear the orphan and recreate rather than
+    # fail with "already exists"; the branch still holds the committed work.
+    worktree = worktrees.ensure(git_project, "T-001")
+    (worktree.path / ".npmrc").write_text("ignore-scripts=true\n", encoding="utf-8")
+    worktrees.commit_all(worktree, "T-001: add .npmrc")
+
+    # Simulate the strip: remove every dot-entry (as `cp dir/*` would leave it).
+    for entry in list(worktree.path.iterdir()):
+        if entry.name.startswith("."):
+            if entry.is_dir():
+                worktrees._remove_tree(entry)
+            else:
+                entry.unlink()
+    worktrees.git(git_project.root, "worktree", "prune")  # git drops the orphan
+    assert worktree.ticket not in {w.ticket for w in worktrees.existing(git_project)}
+    assert not (worktree.path / ".npmrc").exists()  # stripped
+
+    healed = worktrees.ensure(git_project, "T-001")
+
+    assert healed.path == worktree.path
+    assert (healed.path / ".git").exists()  # a real worktree again
+    assert worktree.ticket in {w.ticket for w in worktrees.existing(git_project)}
+    assert (healed.path / ".npmrc").is_file()  # restored from the branch
+
+
 def test_worktrees_are_isolated_from_each_other(git_project):
     first = worktrees.ensure(git_project, "T-001")
     second = worktrees.ensure(git_project, "T-002")

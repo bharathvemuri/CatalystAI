@@ -19,6 +19,9 @@ repository's history would undo the isolation it exists to provide.
 
 from __future__ import annotations
 
+import os
+import shutil
+import stat
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -100,6 +103,19 @@ def existing(project: Project) -> list[Worktree]:
     return found
 
 
+def _remove_tree(path: Path) -> None:
+    """Delete a directory tree, clearing the read-only bit git objects and
+    ``node_modules`` carry on Windows so the removal does not stall halfway."""
+    def clear_readonly(func, target, _exc):  # noqa: ANN001 - shutil callback
+        os.chmod(target, stat.S_IWRITE)
+        func(target)
+
+    try:
+        shutil.rmtree(path, onexc=clear_readonly)     # Python 3.12+
+    except TypeError:
+        shutil.rmtree(path, onerror=clear_readonly)   # Python < 3.12
+
+
 def ensure(project: Project, ticket: str, base: str | None = None) -> Worktree:
     """Create the ticket's worktree if it is not already there.
 
@@ -117,11 +133,22 @@ def ensure(project: Project, ticket: str, base: str | None = None) -> Worktree:
 
     for worktree in existing(project):
         if worktree.ticket == ticket:
-            if worktree.path.exists():
+            if worktree.path.exists() and (worktree.path / ".git").exists():
                 return worktree
-            # Registered but gone from disk — a crash or a manual delete.
+            # Registered but gone or corrupt on disk — a crash, a manual delete,
+            # or an external dotfile-blind copy that stripped its `.git` link.
             git(project.root, "worktree", "prune")
             break
+
+    # A directory can be left at the target that git no longer tracks as a
+    # worktree: an external, dotfile-blind copy tool can strip its `.git` link
+    # (skipping every dot-entry), or a crash can orphan it. `git worktree add`
+    # would then fail with a cryptic "already exists". Clear the stale tree so
+    # the run self-heals — the branch still holds every commit, so nothing the
+    # ticket produced is lost.
+    if target.exists() and not (target / ".git").exists():
+        git(project.root, "worktree", "prune")
+        _remove_tree(target)
 
     target.parent.mkdir(parents=True, exist_ok=True)
     base_ref = base or head_ref(project.root)
