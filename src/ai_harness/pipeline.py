@@ -41,12 +41,33 @@ class PipelineError(RuntimeError):
 @dataclass
 class TicketOutcome:
     ticket: str
-    status: str                       # awaiting_approval | blocked | failed
+    status: str                       # awaiting_approval | blocked | stopped | failed
     decision: str | None = None
     cycles: int = 0
     detail: str = ""
     gate_results: list[GateResult] = field(default_factory=list)
     reports: dict[str, Path] = field(default_factory=dict)
+
+
+@dataclass
+class CycleReview:
+    """What a human sees at a per-cycle checkpoint (``--step``)."""
+    ticket: str
+    cycle: int
+    max_cycles: int
+    decision: str                     # the Reviewer's decision this cycle
+    required_changes: list[str]
+    gate_summary: str
+    findings: dict[str, int]          # review agent -> finding count
+    blocking: list[str]
+    reports: dict[str, Path]          # agent -> report path
+
+
+@dataclass
+class CheckpointDecision:
+    """A human's answer at a checkpoint."""
+    action: str                       # "continue" | "stop" | "approve"
+    feedback: str = ""                # extra guidance appended for "continue"
 
 
 def _render(text: str) -> str:
@@ -79,8 +100,10 @@ class TicketPipeline:
                  registry: Registry, thresholds: Thresholds,
                  gates_dir: str, report_dir: str, shell: str = "sh",
                  backend: str = runners.API,
-                 announce: Callable[[str], None] = lambda _m: None):
+                 announce: Callable[[str], None] = lambda _m: None,
+                 checkpoint: Callable[["CycleReview"], "CheckpointDecision"] | None = None):
         self.backend = backend
+        self.checkpoint = checkpoint
         self.report_dir = report_dir
         self.project = project
         self.task = task
@@ -251,10 +274,47 @@ class TicketPipeline:
                                      cycles=cycle, gate_results=gate_results,
                                      reports=dict(self.reports))
 
+            # Per-cycle human checkpoint (opt-in via --step). The Reviewer wants
+            # changes; before spending another developer+gates cycle, let a human
+            # continue, add their own guidance, stop, or approve as-is.
+            human_feedback = ""
+            if self.checkpoint is not None:
+                choice = self.checkpoint(CycleReview(
+                    ticket=self.ticket, cycle=cycle, max_cycles=max_cycles,
+                    decision=decision,
+                    required_changes=reviewer.result.get("required_changes", []),
+                    gate_summary=gates.render_summary(gate_results),
+                    findings={a: len(r.result.get("findings", []) or [])
+                              for a, r in reviews.items()},
+                    blocking=blocking, reports=dict(self.reports),
+                ))
+                if choice.action == "stop":
+                    self.announce(f"  {self.ticket}  stopped by you at cycle {cycle}")
+                    self._status("blocked")
+                    return TicketOutcome(self.ticket, "stopped", decision=decision,
+                                         cycles=cycle,
+                                         detail=f"stopped by you at cycle {cycle}",
+                                         gate_results=gate_results,
+                                         reports=dict(self.reports))
+                if choice.action == "approve":
+                    self.announce(f"  {self.ticket}  approved by you at cycle {cycle} "
+                                  f"(Reviewer said {decision})")
+                    self._emit("task.review_decided", {
+                        "task_id": self.ticket, "decision": "APPROVE", "cycle": cycle,
+                        "model_decision": decision, "human_override": True,
+                    })
+                    self._status("review_approved")
+                    self._emit("task.human_approval_requested", {"task_id": self.ticket})
+                    return TicketOutcome(self.ticket, "awaiting_approval", decision="APPROVE",
+                                         cycles=cycle, gate_results=gate_results,
+                                         reports=dict(self.reports))
+                human_feedback = choice.feedback.strip()
+
             feedback = "\n".join([
                 f"Decision: {decision}",
                 *(f"- {c}" for c in reviewer.result.get("required_changes", [])),
                 *(f"- gate: {r}" for r in reasons),
+                *([f"- from your reviewer: {human_feedback}"] if human_feedback else []),
             ])
 
         self._status("blocked")

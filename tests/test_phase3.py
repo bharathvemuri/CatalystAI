@@ -651,6 +651,49 @@ def test_failing_tests_block_approval(project):
     assert engine._blocking_conditions(True, [], reviews) == ["qa: 3 test(s) failing"]
 
 
+def _one_cycle(engine, monkeypatch, decision="REQUEST_CHANGES"):
+    """Drive engine.run() through a single cycle whose Reviewer wants changes."""
+    monkeypatch.setattr(engine, "build_index", lambda: None)
+    monkeypatch.setattr(engine, "run_gates", lambda: (True, [], []))
+    monkeypatch.setattr(worktrees, "commit_all", lambda *a, **k: "sha")
+    monkeypatch.setattr(worktrees, "diff", lambda *a, **k: "")
+    monkeypatch.setattr(worktrees, "history", lambda *a, **k: "")
+
+    def run_agent(agent, extra):
+        if agent == "architect":
+            return _agent_result("architect", plan_markdown="p", adr_required=False,
+                                 adr_markdown="", model_overrides=[], affected_files=[])
+        if agent == "reviewer":
+            return _agent_result("reviewer", decision=decision, required_changes=["fix X"])
+        if agent in ("security", "qa", "performance"):
+            return _agent_result(agent, findings=[])
+        return _agent_result(agent, files_changed=[], commands_run=[], deviations=[])
+
+    monkeypatch.setattr(engine, "_run_agent", run_agent)
+
+
+def test_step_checkpoint_stop_halts_the_ticket(project, monkeypatch):
+    engine = _pipeline(project)
+    seen = []
+    engine.checkpoint = lambda v: (seen.append(v), pipeline.CheckpointDecision("stop"))[1]
+    _one_cycle(engine, monkeypatch)
+
+    outcome = engine.run()
+
+    assert outcome.status == "stopped"
+    assert seen and seen[0].cycle == 1 and seen[0].decision == "REQUEST_CHANGES"
+
+
+def test_step_checkpoint_approve_sends_to_the_human_gate(project, monkeypatch):
+    engine = _pipeline(project)
+    engine.checkpoint = lambda v: pipeline.CheckpointDecision("approve")
+    _one_cycle(engine, monkeypatch)
+
+    outcome = engine.run()
+
+    assert outcome.status == "awaiting_approval" and outcome.decision == "APPROVE"
+
+
 def test_adr_numbers_are_allocated_not_chosen(project):
     engine = _pipeline(project)
     engine._write_adr("# ADR\n\nUse Postgres.")

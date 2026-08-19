@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
 from .. import containers, env, gates, pipeline, runner as runners, taskfile, worktrees
@@ -23,7 +24,8 @@ from ..containers import NO_DOCKER, DockerExecutor, docker_available
 from ..context_index import NO_TREE_SITTER, available as index_available
 from ..execution import Executor, HostExecutor, posix_shell
 from ..paths import Project
-from ..pipeline import PipelineError, TicketPipeline, TicketOutcome
+from ..pipeline import (CheckpointDecision, CycleReview, PipelineError,
+                        TicketPipeline, TicketOutcome)
 from ..registry import Registry
 from ..runner import RunnerUnavailable
 from ..state import fold
@@ -43,6 +45,9 @@ def add_parser(subparsers) -> None:
     )
     p.add_argument("ticket", help="task id, e.g. T-001")
     _shared_arguments(p)
+    p.add_argument("--step", action="store_true",
+                   help="pause after each review cycle to continue, add feedback, "
+                        "stop, or approve as-is (interactive; needs a terminal)")
     p.set_defaults(func=run_ticket)
 
     q = subparsers.add_parser(
@@ -219,7 +224,8 @@ def _drive(project: Project, task: TaskFile, args, registry: Registry,
         engine = TicketPipeline(
             project, task, log=log, executor=executor, worktree=worktree,
             registry=registry, thresholds=thresholds, gates_dir=gates_dir,
-            report_dir=report_dir, shell=shell, backend=backend, announce=info)
+            report_dir=report_dir, shell=shell, backend=backend, announce=info,
+            checkpoint=_checkpoint_prompt if getattr(args, "step", False) else None)
         return engine.run()
     finally:
         executor.dispose()
@@ -229,6 +235,52 @@ def _drive(project: Project, task: TaskFile, args, registry: Registry,
                 worktrees.remove(project, task.id)
             except GitError:
                 info(f"  {task.id}  worktree kept (uncommitted changes)")
+
+
+def _checkpoint_prompt(view: CycleReview) -> CheckpointDecision:
+    """Interactive per-cycle checkpoint for ``run-ticket --step``.
+
+    Shows what the cycle produced and asks how to proceed. Without a terminal
+    (piped, ``--yes`` in a job) it continues automatically rather than block.
+    """
+    info("")
+    info(f"  -- {view.ticket} cycle {view.cycle}/{view.max_cycles}: "
+         f"Reviewer decided {view.decision} --")
+    info(view.gate_summary)
+    for label, items in (("blocking", view.blocking),
+                         ("required changes", view.required_changes)):
+        if items:
+            info(f"  {label}:")
+            for item in items:
+                info(f"    - {item}")
+    if view.findings:
+        info("  findings: " + ", ".join(f"{a}={n}" for a, n in view.findings.items()))
+    if view.reports:
+        info(f"  reports:  {next(iter(view.reports.values())).parent}/")
+
+    if not sys.stdin.isatty():
+        info("  (no terminal — continuing automatically)")
+        return CheckpointDecision("continue")
+
+    while True:
+        try:
+            answer = input(
+                "  next — [c]ontinue / [f]eedback / [s]top / [a]pprove? ").strip().lower()
+        except EOFError:
+            return CheckpointDecision("continue")
+        if answer in ("", "c", "continue"):
+            return CheckpointDecision("continue")
+        if answer in ("s", "stop"):
+            return CheckpointDecision("stop")
+        if answer in ("a", "approve"):
+            return CheckpointDecision("approve")
+        if answer in ("f", "feedback"):
+            try:
+                text = input("  your feedback to the developer: ").strip()
+            except EOFError:
+                text = ""
+            return CheckpointDecision("continue", feedback=text)
+        info("  please answer c, f, s, or a.")
 
 
 def _report(outcome: TicketOutcome, project: Project) -> None:
