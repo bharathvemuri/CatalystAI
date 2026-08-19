@@ -15,6 +15,7 @@ evidence as one that did not, and the audit trail should say which it was.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 from .. import containers, env, gates, pipeline, runner as runners, taskfile, worktrees
@@ -92,7 +93,8 @@ def preconditions(project: Project, args
     # environment are documented to live in `.env` too (see `.env.example`), so
     # load those tiers before selecting a backend — otherwise a key sitting in
     # the repo's `.env` is invisible and the run falls back to the CLI login.
-    for name, source in env.load_into_environ(project).items():
+    loaded = env.load_into_environ(project)
+    for name, source in loaded.items():
         info(f"  credential   {name} from {rel(Path(source), project.root)}")
 
     # A dry run still resolves the backend, because "which model calls would
@@ -104,6 +106,15 @@ def preconditions(project: Project, args
         if not args.dry_run:
             die(str(exc))
         backend = ""
+
+    if backend == runners.CLAUDE_CODE and loaded:
+        # The keys above were loaded only so the API runner could be *considered*.
+        # The Claude Code Agent SDK prefers ANTHROPIC_API_KEY over the claude.ai
+        # login, so a `.env` key left set would route claude-code through the API
+        # (and its billing) instead of the subscription. Undo the load for this
+        # backend; a key exported in the real environment is left untouched.
+        for name in loaded:
+            os.environ.pop(name, None)
 
     if not index_available():
         warn(f"the context index is unavailable, so agents will read files directly.\n"
