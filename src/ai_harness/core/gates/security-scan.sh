@@ -22,8 +22,19 @@ fi
 
 case "$STACK" in
     node)
-        if command -v npm >/dev/null 2>&1; then
-            run_capture npm audit --audit-level=high
+        # Audit with the package manager the repo actually uses. `npm audit`
+        # needs a package-lock.json; a pnpm or yarn workspace has none, so
+        # running npm here fails with ENOLOCK regardless of any real
+        # vulnerability — a spurious gate failure the repo could never clear.
+        # `node_runner` reads the lockfile the same way bootstrap does.
+        RUNNER=$(node_runner)
+        case "$RUNNER" in
+            pnpm) AUDIT="pnpm audit --audit-level high" ;;
+            yarn) AUDIT="yarn npm audit --severity high" ;;
+            *)    AUDIT="npm audit --audit-level=high" ;;
+        esac
+        if command -v "$RUNNER" >/dev/null 2>&1; then
+            run_capture $AUDIT
             if [ "$RUN_EXIT" -eq 0 ]; then ECOSYSTEM_STATUS="clean"; else ECOSYSTEM_STATUS="findings"; FAILED=1; fi
         fi
         ;;
