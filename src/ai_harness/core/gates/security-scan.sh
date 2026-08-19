@@ -13,7 +13,15 @@ ECOSYSTEM_STATUS="none"
 FAILED=0
 
 if command -v semgrep >/dev/null 2>&1; then
-    run_capture semgrep scan --config auto --error --quiet .
+    # Exclude installed dependencies and build output explicitly. semgrep would
+    # normally skip them via .gitignore, but a ticket worktree's `.git` is a link
+    # git cannot resolve inside the container, so .gitignore is not honoured and
+    # semgrep otherwise walks all of node_modules/.pnpm-store — thousands of
+    # third-party files. That is both the ~10-minute scan time and the flood of
+    # findings from dependency code rather than the code under review.
+    run_capture semgrep scan --config auto --error --quiet \
+        --exclude node_modules --exclude .pnpm-store --exclude dist \
+        --exclude test-results --exclude tests/dist .
     if [ "$RUN_EXIT" -eq 0 ]; then SEMGREP_STATUS="clean"; else SEMGREP_STATUS="findings"; FAILED=1; fi
 else
     echo "semgrep is not installed; the base image is expected to provide it" >> "$EVIDENCE_FILE"
