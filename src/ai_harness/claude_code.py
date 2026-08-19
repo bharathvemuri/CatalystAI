@@ -40,6 +40,12 @@ SUBMIT_TOOL = "submit_result"
 
 DEFAULT_MAX_TURNS = 60
 
+# Wall-clock ceiling for one agent's SDK call. Break-on-capture ends a normal
+# agent the moment it submits, so this only fires when something is wrong: the
+# `claude` CLI stalls, or the agent loops without ever producing a valid result.
+# Generous, because a legitimate agent can explore a large repo for many minutes.
+DEFAULT_TIMEOUT_S = 1200
+
 NOT_INSTALLED = (
     "the Claude Code runner needs the claude-agent-sdk package and a logged-in "
     'Claude Code CLI.\n  pip install "ai-harness[claude-code]"\n  claude  '
@@ -114,12 +120,14 @@ class ClaudeCodeRunner:
 
     backend = "claude-code"
 
-    def __init__(self, model: str, effort: str = "", registry: Registry | None = None):
+    def __init__(self, model: str, effort: str = "", registry: Registry | None = None,
+                 timeout: float = DEFAULT_TIMEOUT_S):
         if registry is not None:
             registry.validate(model)
         self.model = model
         self.requested_effort = effort
         self.effort = ""
+        self.timeout = timeout
 
     # ------------------------------------------------------------- the loop
 
@@ -213,7 +221,9 @@ class ClaudeCodeRunner:
 
         terminal = ""
         failure = ""
-        try:
+
+        async def _consume() -> None:
+            nonlocal terminal, failure
             async for message in sdk.query(prompt=_stream_once(user), options=options):
                 reason = getattr(message, "terminal_reason", None)
                 if reason:
@@ -224,6 +234,21 @@ class ClaudeCodeRunner:
                 # frame is where the actionable text lives, so it is kept.
                 if getattr(message, "is_error", False):
                     failure = str(getattr(message, "result", "") or "").strip()
+                # Stop the moment the agent has handed us a valid result. The
+                # submit tool is terminal; without this the loop runs until the
+                # agent stops on its own, and a diligent agent re-verifies and
+                # re-submits — thrashing for many minutes past a good result.
+                if SUBMIT_TOOL in captured:
+                    break
+
+        try:
+            await asyncio.wait_for(_consume(), timeout=self.timeout)
+        except asyncio.TimeoutError as exc:
+            raise LLMError(
+                f"the Claude Code runner timed out after {self.timeout:.0f}s without "
+                "a result. The `claude` CLI call did not finish — the agent may be "
+                "stalled or looping"
+                + (f" (terminal reason: {terminal})" if terminal else "") + ".") from exc
         except LLMError:
             raise
         except Exception as exc:

@@ -320,6 +320,52 @@ def test_an_sdk_without_permission_callbacks_is_refused(monkeypatch):
     assert "PermissionResultAllow" in str(exc.value)
 
 
+def test_the_loop_stops_the_moment_a_valid_result_is_submitted(monkeypatch):
+    """A diligent agent keeps working and re-submitting after a good result. The
+    runner must stop at the first accepted submission, not thrash past it."""
+    module = install_fake_sdk(monkeypatch, [])
+    past_submit = {"messages": 0}
+
+    class Msg:
+        terminal_reason = None
+        is_error = False
+
+    async def query(*, prompt, options):
+        _ = [m async for m in prompt]
+        submit = options.mcp_servers[MCP_SERVER].tools[SUBMIT_TOOL].handler
+        yield Msg()                                               # before submit
+        await submit({"status": "complete", "summary": "done"})   # captures a result
+        yield Msg()                                               # runner breaks here
+        past_submit["messages"] += 1                              # only if pulled again
+        yield Msg()
+
+    module.query = query
+
+    result = ClaudeCodeRunner(model="claude-opus-5").structured(
+        system="s", user="u", schema=SCHEMA)
+
+    assert result == {"status": "complete", "summary": "done"}
+    assert past_submit["messages"] == 0  # did not keep consuming after the result
+
+
+def test_a_stalled_cli_call_times_out_instead_of_blocking(monkeypatch):
+    """No result and no return: the runner must give up rather than block forever
+    the way one wedged agent hung the pipeline for tens of minutes."""
+    module = install_fake_sdk(monkeypatch, [])
+
+    async def query(*, prompt, options):
+        _ = [m async for m in prompt]
+        await asyncio.sleep(30)   # never finishes within the runner's timeout
+        yield None                # unreachable
+
+    module.query = query
+
+    sub = ClaudeCodeRunner(model="claude-opus-5", timeout=0.1)
+    with pytest.raises(LLMError) as exc:
+        sub.structured(system="s", user="u", schema=SCHEMA)
+    assert "timed out" in str(exc.value)
+
+
 # ------------------------------------------------------- the wiring itself
 
 def test_harness_tools_reach_the_toolbox_and_land_in_the_transcript(monkeypatch):
