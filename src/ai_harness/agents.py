@@ -32,6 +32,12 @@ from .registry import Registry
 AGENTS = ("architect", "developer", "security", "qa", "performance",
           "reviewer", "documentation", "devops")
 
+# The areas the Reviewer renders a per-area verdict for (reviewer.md). Kept here
+# so the result schema can enumerate them: the API's structured-output mode
+# rejects an open-ended string map, so verdicts is a list keyed by these.
+REVIEW_AREAS = ("requirements", "architecture", "correctness", "security",
+                "testing", "performance", "maintainability", "documentation")
+
 # A *role* is a contract an agent can be run under. Usually one per agent, but
 # the Documentation agent has two missions with the same write scope and the
 # same model: the per-ticket pass, and the phase 4 project pass. Keeping that as
@@ -378,9 +384,18 @@ RESULT_SCHEMAS: dict[str, dict[str, Any]] = {
         "adr_required": {"type": "boolean"},
         "adr_markdown": {"type": "string"},
         "model_overrides": {
-            "type": "object",
-            "description": "Only agents whose registry default you are deviating from.",
-            "additionalProperties": {"type": "string"},
+            "type": "array",
+            "description": "One entry per agent whose registry default you are "
+                           "deviating from; omit agents left at their default.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "agent": {"type": "string", "enum": list(AGENTS)},
+                    "model": {"type": "string"},
+                },
+                "required": ["agent", "model"],
+                "additionalProperties": False,
+            },
         },
         "affected_files": {"type": "array", "items": {"type": "string"}},
     }, ["plan_markdown", "adr_required", "adr_markdown", "model_overrides", "affected_files"]),
@@ -425,7 +440,19 @@ RESULT_SCHEMAS: dict[str, dict[str, Any]] = {
 
     "reviewer": _schema({
         "decision": {"type": "string", "enum": ["APPROVE", "REQUEST_CHANGES", "BLOCK"]},
-        "verdicts": {"type": "object", "additionalProperties": {"type": "string"}},
+        "verdicts": {
+            "type": "array",
+            "description": "One entry per review area you assessed.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "area": {"type": "string", "enum": list(REVIEW_AREAS)},
+                    "verdict": {"type": "string"},
+                },
+                "required": ["area", "verdict"],
+                "additionalProperties": False,
+            },
+        },
         "required_changes": {"type": "array", "items": {"type": "string"}},
     }, ["decision", "verdicts", "required_changes"]),
 

@@ -175,9 +175,10 @@ class TicketPipeline:
         architect = self._run_agent("architect", {
             "git_history": worktrees.history(self.worktree.path),
         })
-        overrides = architect.result.get("model_overrides") or {}
-        for agent, model in overrides.items():
-            if agent in agents.AGENTS:
+        overrides = architect.result.get("model_overrides") or []
+        for entry in overrides:
+            agent, model = entry.get("agent"), entry.get("model")
+            if agent in agents.AGENTS and model:
                 self.models[agent] = self.registry.validate(model)
         assigned = {a: self.models.get(a, self.registry.default_for(a))
                     for a in agents.AGENTS if a != "architect"}

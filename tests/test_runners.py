@@ -451,5 +451,5 @@ class _StubRunner:
 
     def agentic(self, **kwargs):
         return {"status": "complete", "summary": "", "blocking_reason": "",
-                "report_markdown": "", "decision": "APPROVE", "verdicts": {},
+                "report_markdown": "", "decision": "APPROVE", "verdicts": [],
                 "required_changes": []}, []
