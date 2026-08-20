@@ -8,6 +8,7 @@ is deterministic and is what these cover.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 
 import pytest
@@ -301,6 +302,36 @@ def test_build_gate_fails_on_broken_source(project, tmp_path):
                             report_dir=(tmp_path / "reports").as_posix(),
                             project=project, shell=posix_shell())
     assert result.status == "fail"
+
+
+@pytest.mark.skipif(posix_shell() is None, reason="no POSIX shell on this machine")
+def test_security_gate_scans_with_security_rulesets_not_auto(project, tmp_path, monkeypatch):
+    """`--config auto` drags in package-manager policy rules (pnpm/npm config
+    lint) that are not code vulnerabilities and can be unsatisfiable on a pinned
+    package manager, which loops the ticket. The gate must use security packs."""
+    workdir = tmp_path / "app"
+    workdir.mkdir()
+    (workdir / "package.json").write_text('{"name":"x","version":"0.0.0"}\n', encoding="utf-8")
+    (workdir / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
+
+    # A stub `semgrep` so the real invocation is recorded regardless of whether
+    # semgrep is installed on the test machine; exit 0 == a clean scan.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "semgrep"
+    stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ["PATH"])
+
+    reports = tmp_path / "reports"
+    gates.run_gate("security-scan", HostExecutor(root=workdir), ticket="T-001",
+                   gates_dir=project.resolve("gates").as_posix(),
+                   report_dir=reports.as_posix(), project=project, shell=posix_shell())
+
+    log = (reports / "evidence" / "security-scan.log").read_text(encoding="utf-8")
+    assert "--config auto" not in log
+    assert "p/security-audit" in log and "p/secrets" in log
+    assert "p/javascript" in log  # the node stack's language pack
 
 
 # --------------------------------------------------------------- bootstrap

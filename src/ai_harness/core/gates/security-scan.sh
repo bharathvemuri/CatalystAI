@@ -13,13 +13,27 @@ ECOSYSTEM_STATUS="none"
 FAILED=0
 
 if command -v semgrep >/dev/null 2>&1; then
-    # Exclude installed dependencies and build output explicitly. semgrep would
-    # normally skip them via .gitignore, but a ticket worktree's `.git` is a link
-    # git cannot resolve inside the container, so .gitignore is not honoured and
-    # semgrep otherwise walks all of node_modules/.pnpm-store — thousands of
-    # third-party files. That is both the ~10-minute scan time and the flood of
-    # findings from dependency code rather than the code under review.
-    run_capture semgrep scan --config auto --error --quiet \
+    # Security rulesets, not `--config auto`. auto pulls semgrep's full registry
+    # selection, which includes package-manager *policy* rules (pnpm/npm supply-
+    # chain config lint): opinions about configuration, not code vulnerabilities,
+    # and on a repo pinned to an older package manager the settings they demand are
+    # inert — so the gate blocks on a finding the code cannot honestly satisfy, and
+    # the ticket loops without a real fix. security-audit + secrets are the
+    # security packs (what the Security agent itself uses); the stack's language
+    # pack adds depth.
+    SEMGREP_CONFIGS="--config p/security-audit --config p/secrets"
+    case "$STACK" in
+        node)   SEMGREP_CONFIGS="$SEMGREP_CONFIGS --config p/javascript --config p/typescript" ;;
+        python) SEMGREP_CONFIGS="$SEMGREP_CONFIGS --config p/python" ;;
+        go)     SEMGREP_CONFIGS="$SEMGREP_CONFIGS --config p/golang" ;;
+        java)   SEMGREP_CONFIGS="$SEMGREP_CONFIGS --config p/java" ;;
+        rust)   SEMGREP_CONFIGS="$SEMGREP_CONFIGS --config p/rust" ;;
+    esac
+    # Dependencies and build output are excluded explicitly: a ticket worktree's
+    # `.git` is a link git cannot resolve in the container, so semgrep does not
+    # honour .gitignore and would otherwise walk all of node_modules/.pnpm-store —
+    # thousands of third-party files, the old ~10-minute scan and a flood of noise.
+    run_capture semgrep scan $SEMGREP_CONFIGS --error --quiet \
         --exclude node_modules --exclude .pnpm-store --exclude dist \
         --exclude test-results --exclude tests/dist .
     if [ "$RUN_EXIT" -eq 0 ]; then SEMGREP_STATUS="clean"; else SEMGREP_STATUS="findings"; FAILED=1; fi
