@@ -26,6 +26,7 @@ is a validated dict either way.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import shutil
 from pathlib import Path
 from typing import Any, Callable
@@ -221,10 +222,16 @@ class ClaudeCodeRunner:
 
         terminal = ""
         failure = ""
+        # Held so it can be closed in order, from this task. `query()` has no
+        # interrupt and expects to be fully drained; when we stop early it is
+        # left suspended, and asyncio's shutdown then tries to aclose it while
+        # the SDK's transport is mid-flight — "aclose(): asynchronous generator
+        # is already running". Closing it ourselves in the finally avoids that.
+        stream = sdk.query(prompt=_stream_once(user), options=options)
 
         async def _consume() -> None:
             nonlocal terminal, failure
-            async for message in sdk.query(prompt=_stream_once(user), options=options):
+            async for message in stream:
                 reason = getattr(message, "terminal_reason", None)
                 if reason:
                     terminal = str(reason)
@@ -256,6 +263,9 @@ class ClaudeCodeRunner:
             # from a missing binary to a transport decode error. Every one of
             # them is the same thing to the pipeline: this agent did not run.
             raise LLMError(_failed(failure, f"{type(exc).__name__}: {exc}")) from exc
+        finally:
+            with contextlib.suppress(Exception):
+                await stream.aclose()
 
         if failure:
             raise LLMError(_failed(failure, ""))
